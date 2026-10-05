@@ -1,56 +1,77 @@
-# `selora run "<prompt>" [--model <id>]`
+# `selora run "<prompt>" [--model <id>] [--session <name>] [--safe] [--yes] [--max-turns <n>]`
 
 One-shot streaming completion — the same pipeline as `chat`
 (`POST /v1/chat/completions`, SSE deltas, usage chunk, `gateway.charge`)
-but with **no REPL**: the prompt is the argument, the reply streams once, the
-process exits. Non-interactive by design; safe with a piped stdout.
+but with **no REPL** — and, since v0.2, a real **agent**: the request
+carries the tool definitions, and when the model actually requests tools on
+the wire, each call goes through the permission gate before it executes.
+See [docs/agent.md](../agent.md) for the full sandbox and permission model.
 
 ```
-$ selora run "explain this"
-Hello, world!
+$ selora run "what does src/index.ts do?"
+→ read_file(src/index.ts)
+┌─ read_file(src/index.ts)
+│   1 line, 20 B
+└─ Allow? [y]es / [n]o / [a]lways this session
+y
+· read src/index.ts (1 line, 20 B)
+It exports a single constant…
+  Tokens: 240 · Cost: $0.002
   Tokens: 6,055 · Cost: $0.018
+  Agent totals: 2 turns · Tokens: 6,295 · Cost: $0.020
 ```
 
 - Content deltas stream to **stdout** the moment they arrive (no buffering).
   `reasoning_content` deltas (when the model sends them) stream dim-gray to
   **stderr**, so piping stdout still yields clean reply text.
-- The footer appears **only if the usage chunk actually arrived** — real
-  numbers only, never invented (`Tokens` = `total_tokens` comma-grouped;
-  `Cost` = `gateway.charge`, sub-dime amounts keep 3 decimals). It is the
-  same footer implementation `chat` uses.
+- Tool activity renders as gray `→ tool(...)` lines on stderr — the same
+  live-progress contract, plus the permission boxes.
+- Per-turn footers and a cumulative `Agent totals` line appear **only if the
+  usage chunks actually arrived** — real numbers only, never invented.
 - A missing prompt exits 1 with `✗ Usage: selora run "<prompt>"`.
+
+## The agent loop
+
+Tool execution is triggered by **real wire tool calls only**
+(`delta.tool_calls` / `finish_reason: "tool_calls"`) — never by sniffing the
+prompt text. Each call: permission prompt (dry-run preview → y/n/a[/e for
+`run_command`]) → execute → the result is appended as a `tool` message →
+the model streams again. Bounded by the turn cap (25 by default), with a
+3-consecutive-failure circuit breaker (exit 1) and the budget guard above.
+
+### Flags
+
+- `--safe` — restrict the agent to the read-only tools (`read_file`, `glob`,
+  `grep`, `git_status`, `git_diff`, `git_log`). Write/exec tools are not even
+  offered to the model.
+- `--yes` — auto-approve every tool the (possibly `--safe`) toolset allows,
+  non-interactively. Without a TTY and without `--yes`, prompts deny safely.
+- `--max-turns <n>` — turn cap, 1–200 (default: the project `selora.json`
+  `agent.maxTurns`, else 25). Invalid values exit 1 with the exact rule.
+- `--session <name>` — resume/create a named conversation session (below).
 
 ## Model resolution
 
-`--model <id>` > the project's `selora.json` model (from the current
-directory, see `selora init`) > the global default model
-(`selora model <id>`) > `glm-5.3-flash`.
+`--model <id>` > the resumed session's model > the project's `selora.json`
+model (from the current directory, see `selora init`) > the global default
+model (`selora model <id>`) > `glm-5.3-flash`.
 
 The hierarchy is resolved silently — nothing is printed about it unless
 `--debug` (`· model: <id> (resolved from <source>)`). Unlike `chat`, `run`
 does **not** pre-verify the model against `/v1/models/:id`; the gateway
 rejects an unknown model at request time and that error is rendered verbatim.
+The model that actually ran is saved into the session.
 
-## History
+## Sessions
 
-A **single user message**, in memory only — nothing is written to disk and
-nothing from previous `run` invocations is remembered. Multi-turn
-conversations belong to `selora chat`.
-
-## Tool-call honesty
-
-If the model _actually_ requested tools on the wire — any delta carrying
-`tool_calls` or a finish chunk with `finish_reason: "tool_calls"` — the reply
-is followed by a gray stderr line:
-
-```
-· agent mode not implemented yet — see docs/agent.md
-```
-
-This is real wire detection, never prompt-text guessing: the CLI never sniffs
-your prompt for words like "file". The content that streamed before the tool
-call is still shown. See [docs/agent.md](../agent.md) for what an agent loop
-would need.
+`--session <name>` persists the conversation in
+`.selora/sessions/<name>.json` (project-local, atomic write). The session
+**advances only on completed runs** — a run that dies mid-stream never
+writes. The next `--session <name>` run resumes the full history, including
+tool calls and results. Names are validated to a conservative slug set
+(letters, digits, dash, underscore, dot; alphanumeric first; 1–64 chars).
+Manage saved sessions with `selora sessions` (see
+[sessions.md](sessions.md)).
 
 ## Errors
 
@@ -60,11 +81,8 @@ the backend message plus a wait hint, 401 exits 1 with login guidance
 (`/v1/chat/completions` is API-key-only — with no stored key:
 `✗ You are not logged in. Run: selora login`). In-band stream errors (sent
 as data events after the headers) render their backend message verbatim. All
-failures exit 1.
-
-## Flags
-
-`--model <id>`, plus globals `--debug`, `--json`, `--api-url <url>`.
+failures exit 1. A tool that fails is NOT a CLI error — the failure text
+goes back to the model; only 3 consecutive tool failures abort (exit 1).
 
 ## `--json`
 
@@ -77,13 +95,17 @@ Streaming text and machine output do not mix: in `--json` mode the reply is
   "model": "glm-5.3-flash",
   "content": "Hello, world!",
   "finishReason": "stop",
-  "usage": { "promptTokens": 4821, "completionTokens": 1234, "totalTokens": 6055 },
-  "charge": "0.018234"
+  "turns": 2,
+  "tools": [{ "tool": "read_file", "label": "read_file(src/index.ts)", "ok": true, "summary": "read src/index.ts (1 line, 20 B)" }],
+  "usage": { "promptTokens": 5021, "completionTokens": 1274, "totalTokens": 6295 },
+  "charge": "0.020234"
 }
 ```
 
-`usage` and `charge` appear only when the stream actually carried them (the
-raw scale-6 decimal string is preserved for `charge`). A tool-call request is
-signaled by `finishReason: "tool_calls"` — there is no separate flag, and the
-gray agent-mode note is a human-mode-only stderr line. Errors use the shared
-`{ok:false, error:{…}}` envelope.
+`usage` and `charge` appear only when a turn actually carried them (the raw
+scale-6 decimal string is preserved for `charge`); `charge` is the
+**cumulative** cost across all turns. `tools` lists every tool event with
+its outcome. JSON mode cannot prompt: without `--yes` every tool is denied
+and the denial is fed back to the model; with `--yes` tools execute. A run
+stopped by the failure breaker adds `"stopped": "tool-failures"` and exits 1.
+Errors use the shared `{ok:false, error:{…}}` envelope.

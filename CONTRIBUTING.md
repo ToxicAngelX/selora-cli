@@ -63,7 +63,7 @@ src/commands/         one file per command
 src/api/              client (the single HTTP chokepoint), endpoints, SSE, redaction
 src/auth/             key storage, prompts, key-name suggestion
 src/config/           XDG config + project selora.json
-src/agent/            the Tool interface + registry (library-only in v0.1)
+src/agent/            the agent: loop, permissions, sandbox, tools, sessions
 docs/                 per-command reference, api-gaps.md, agent.md
 tests/                vitest suites + a mock gateway
 ```

@@ -1,10 +1,11 @@
 # selora
 
 Open-source command-line client for the [Selora API gateway](https://api.selora.lol).
-Log in, check your balance and usage, list models, manage API keys, and chat
-with models — streaming — straight from the terminal. It is an independent
-codebase: no website or IDE required, and nothing is sent anywhere except the
-Selora API itself.
+Log in, check your balance and usage, list models, manage API keys, chat
+with models — streaming — and run a **permission-gated agent** that reads,
+writes, and edits your files, runs commands, and drives git, straight from
+the terminal. It is an independent codebase: no website or IDE required, and
+nothing is sent anywhere except the Selora API itself.
 
 ## Requirements
 
@@ -40,6 +41,7 @@ npm i -g .
 selora login            # email + password (see below for Google-only accounts)
 selora balance          # wallet + rolling spend windows
 selora chat             # streaming REPL (Ctrl+C aborts a reply, Ctrl+D exits)
+selora run "fix the TODO in src/api.ts"   # the agent: tools, permission-gated
 ```
 
 `selora login` prompts for your email and password, then creates a **dedicated
@@ -71,8 +73,9 @@ The key is validated against the API **before** anything is stored.
 | `selora model [id]`                   | show the default model, or set it to `<id>`                                   | [model.md](docs/commands/model.md)           |
 | `selora keys [list\|create\|revoke]`  | manage API keys (default: list)                                               | [keys.md](docs/commands/keys.md)             |
 | `selora chat`                         | chat with a model in an interactive streaming session                         | [chat.md](docs/commands/chat.md)             |
-| `selora run "<prompt>"`               | one-shot streaming completion (no REPL)                                       | [run.md](docs/commands/run.md)               |
-| `selora init`                         | write a project-local selora.json (model + future agent context globs)        | [init.md](docs/commands/init.md)             |
+| `selora run "<prompt>"`               | one-shot streaming completion with the agent tool loop (permissions gated)     | [run.md](docs/commands/run.md)               |
+| `selora sessions [list\|show\|rm]`    | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
+| `selora init`                         | write a project-local selora.json (model + agent context globs)               | [init.md](docs/commands/init.md)             |
 | `selora completion [bash\|zsh\|fish]` | print a shell completion script                                               | [completion.md](docs/commands/completion.md) |
 
 Global flags on every command: `--json` (machine-readable output only),
@@ -127,7 +130,6 @@ selora model gpt-5.2-mini     # sets the stored default (verified against /v1/mo
 
 Per-invocation: `selora chat --model <id>`, `selora run --model <id>`, or a
 project `selora.json` (see below) for `run`.
-
 ## Privacy
 
 - **Zero telemetry.** No analytics, no crash reporting, no usage pings. The
@@ -137,7 +139,11 @@ project `selora.json` (see below) for `run`.
   printed. The one deliberate exception is `selora keys create`, whose entire
   purpose is printing the one-time secret the backend returns exactly once.
 - Conversation state is in-memory only — never written to disk, never sent
-  anywhere except as the `messages` array of the next request.
+  anywhere except as the `messages` array of the next request. The one
+  exception is an explicit `selora run --session <name>`, which saves the
+  conversation into the project's `.selora/sessions/` (visible, deletable
+  via `selora sessions rm`). Agent tool results travel the same `messages`
+  array — nothing else about your files is sent anywhere.
 - MIT license — see [LICENSE](LICENSE).
 
 ## Configuration
@@ -155,8 +161,19 @@ variables and flags override them.
 
 Project config: `selora init` writes a `selora.json` in the current directory
 with the project's default model plus `context.include`/`context.exclude`
-globs. The globs are saved for a future agent and are **not read yet** in
-v0.1 — see [docs/agent.md](docs/agent.md) for what exists and what does not.
+globs. The agent enforces `context.exclude` for its read/search tools
+(`context.include` stays advisory), and an optional hand-edited `"agent"`
+section tunes the loop:
+
+```json
+{
+  "agent": { "maxTurns": 25, "allowWindowsCmd": false }
+}
+```
+
+`maxTurns` caps the agent loop (1–200, default 25);
+`allowWindowsCmd` opts `run_command` in on Windows (off by default). See
+[docs/agent.md](docs/agent.md) for the full sandbox and permission model.
 
 Shell completion:
 

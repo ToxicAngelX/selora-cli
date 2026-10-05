@@ -3,12 +3,12 @@
 Write a project-local `selora.json` in the **current directory** — distinct
 from the global XDG config (`~/.config/selora/config.json`), which keeps the
 API key and the global default model. `selora.json` is the _project's_
-configuration: its model choice and the context globs for the future agent.
+configuration: its model choice and the context globs the agent enforces.
 
 ```
 ✓ Wrote selora.json (model: glm-5.3-flash)
-· v0.1 stores this config only — context globs are saved for the future
-  agent and are NOT read yet (see docs/agent.md)
+· the agent enforces context.exclude for read/search tools; an optional
+  "agent" section (maxTurns, allowWindowsCmd) can be hand-edited (see docs/agent.md)
 ```
 
 The file content (2-space JSON, trailing newline):
@@ -37,9 +37,11 @@ is written**.
 
 ## Honesty notes
 
-- **v0.1 stores this config only.** The `model` field is read by
-  `selora run`; the `context` globs are saved for the future agent and are
-  **NOT read yet** (see [docs/agent.md](../agent.md)).
+- **What is read:** the `model` field (by `selora run`) and the
+  `context.exclude` globs (by the agent's read/search tools — the shipped
+  defaults apply when there is no file). `context.include` is advisory only,
+  never a whitelist. The optional hand-edited `"agent"` section (`maxTurns`,
+  `allowWindowsCmd`) is also read; `init` does not write it.
 - An existing `selora.json` is never clobbered: without `--force` the command
   prints `selora.json already exists (use --force)` and exits 1.
 - Reading is defensive: a malformed `selora.json` elsewhere on disk is

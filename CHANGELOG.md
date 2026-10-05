@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-05
+
+The agent release. `selora run` becomes a real, permission-gated agent loop;
+the v0.1 tool skeleton is filled in with no breaking changes.
+
+### Added
+
+- **The agent loop** (`src/agent/loop.ts`): `selora run` attaches the tool
+  definitions to the chat request; when the model actually requests tools on
+  the wire (wire-based detection, never prompt sniffing), each call is
+  decoded, permission-gated, executed, and its result is appended to the
+  history — then the model streams again. Turn cap (default 25, `--max-turns`
+  or `agent.maxTurns` in selora.json, 1–200), a 3-consecutive-failure
+  circuit breaker (exit 1), and cumulative BigInt token/cost budget lines
+  across turns.
+- **Tools** (`src/agent/tools/`): `read_file` (200 lines default), `write_file`
+  (full-content preview), `edit_file` (first occurrence, find/replace with
+  context), `glob` and `grep` (dependency-free matcher, 500/200-result caps,
+  5000-entry walk cap), `run_command` (spawn shell:false + quote-aware
+  tokenizer, 60s default timeout, 8 KB output caps; Windows opt-in via
+  `agent.allowWindowsCmd`), and git tools (`git_status`, `git_diff`,
+  `git_log`, `git_commit`, `git_restore` — argv-only git, message never shell
+  text; deliberately no push/pull/remote tool, no flag).
+- **Path sandbox** (`src/agent/paths.ts`): project-root containment on the
+  resolved path (absolute-inside, `..` refusals, symlink realpath re-checks,
+  new-files-through-symlinked-dirs), 256 KB file cap, and the project's
+  `context.exclude` globs are now READ (v0.1 stored them only) —
+  `context.include` stays advisory.
+- **Permission gate** (`src/agent/permissions.ts`): the box prompt
+  (y/n/a[/e] for exec tools) with dry-run previews; `a` (always) is
+  session-scoped memory only, never persisted, and for write/exec tools keyed
+  to the exact label; denial feeds `Permission denied by user.` back to the
+  model and the run continues. `--safe` (read-only toolset), `--yes`
+  (non-interactive auto-approve), and `--json` mode rules (deny unless `--yes`).
+- **Sessions**: `selora run --session <name>` saves/resumes conversations in
+  `.selora/sessions/<name>.json` (atomic write, advance-only-on-completed-runs,
+  slug-validated names) and the `selora sessions list|show|rm` command
+  (show renders through the redaction chokepoint; rm requires confirmation).
+- **Wire bridge** (`src/api/endpoints/chat.ts`): request-side `tools` +
+  `tool_choice: "auto"` passthrough and `delta.tool_calls` fragment
+  accumulation (arguments concatenated across chunks, keyed by index);
+  assistant `tool_calls` echo and `tool` message serialization — the
+  round-trip shape verified live against the gateway.
+
+### Fixed
+
+- `microToWireString`: fractional micro-units pad **start**, not end —
+  18234 micro is `0.018234`, not `0.182340` (caught by the cumulative agent
+  cost display).
+
+### Changed
+
+- `selora init`'s gray bullet now states the v0.2 truth (exclude globs are
+  enforced; the optional hand-edited `agent` section).
+- `run`'s `--json` output adds `turns`, `tools`, cumulative `charge`, and
+  `stopped` on non-clean stops; `agent.maxTurns`/`allowWindowsCmd` are read
+  from selora.json; model resolution gains the resumed-session tier.
+- The registry stays import-empty by design: tools reach the loop via
+  `builtinTools()`, never auto-registration (still test-pinned).
+
 ## [0.1.0] - 2026-10-05
 
 First public release.
