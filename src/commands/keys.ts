@@ -29,11 +29,16 @@ export interface KeysFlags {
 }
 
 function dateOnly(iso: string): string {
-  return iso.length >= 10 ? iso.slice(0, 10) : (iso !== '' ? iso : '—');
+  return iso.length >= 10 ? iso.slice(0, 10) : iso !== '' ? iso : '—';
 }
 
 function newClient(ctx: CliContext, baseUrl: string): SeloraClient {
-  return new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  return new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 }
 
 export async function runKeys(
@@ -167,7 +172,10 @@ async function keysCreate(ctx: CliContext, r: Renderer, flags: KeysFlags): Promi
   try {
     const created = await createKey(client, name);
     if (created.secret === '') {
-      throw new SeloraApiError({ kind: 'http_error', message: 'Selora did not return the new key secret.' });
+      throw new SeloraApiError({
+        kind: 'http_error',
+        message: 'Selora did not return the new key secret.',
+      });
     }
     if (ctx.json) {
       // Machine consumers need the secret; it appears exactly once, here.
@@ -200,7 +208,12 @@ async function keysCreate(ctx: CliContext, r: Renderer, flags: KeysFlags): Promi
   }
 }
 
-async function keysRevoke(ctx: CliContext, r: Renderer, arg: string, flags: KeysFlags): Promise<void> {
+async function keysRevoke(
+  ctx: CliContext,
+  r: Renderer,
+  arg: string,
+  flags: KeysFlags,
+): Promise<void> {
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
   const client = newClient(ctx, baseUrl);
@@ -217,7 +230,9 @@ async function keysRevoke(ctx: CliContext, r: Renderer, arg: string, flags: Keys
   let matches = keys.filter((k) => k.id === arg && k.id !== '');
   if (matches.length === 0) {
     const needle = arg.replace(/^(?:…|\.)+/u, '');
-    matches = keys.filter((k) => k.key_hint !== '' && k.key_hint === needle && k.revoked_at === undefined);
+    matches = keys.filter(
+      (k) => k.key_hint !== '' && k.key_hint === needle && k.revoked_at === undefined,
+    );
   }
   if (matches.length === 0) {
     process.exitCode = 1;
@@ -234,7 +249,10 @@ async function keysRevoke(ctx: CliContext, r: Renderer, arg: string, flags: Keys
     if (ctx.json) {
       r.jsonOut({
         ok: false,
-        error: { kind: 'http_error', message: `${matches.length} keys match ${arg} — refusing to guess.` },
+        error: {
+          kind: 'http_error',
+          message: `${matches.length} keys match ${arg} — refusing to guess.`,
+        },
       });
       return;
     }

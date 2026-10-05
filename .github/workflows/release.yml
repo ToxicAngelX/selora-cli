@@ -36,6 +36,10 @@ jobs:
     # holds it until a human approves. Agents never publish.
     environment: npm
     runs-on: ubuntu-latest
+    # gh release create needs write access to repo contents (the default
+    # GITHUB_TOKEN permissions may be read-only depending on repo settings).
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

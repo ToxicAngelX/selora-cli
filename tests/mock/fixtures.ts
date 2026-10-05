@@ -23,7 +23,11 @@ export const LOGIN_SUCCESS = JSON.stringify({
 });
 
 export const LOGIN_FAIL = JSON.stringify({
-  error: { code: 'unauthorized', message: 'Invalid email or password', request_id: 'req_login_fail' },
+  error: {
+    code: 'unauthorized',
+    message: 'Invalid email or password',
+    request_id: 'req_login_fail',
+  },
 });
 
 /** The one-time secret returned by POST /v1/me/keys (43 url-safe chars). */
@@ -151,14 +155,23 @@ export function createKeyBody(secret: string): string {
 }
 
 export const KEY_LIMIT_409 = JSON.stringify({
-  error: { code: 'key_limit_reached', message: 'Key limit reached for this plan', request_id: 'req_409' },
+  error: {
+    code: 'key_limit_reached',
+    message: 'Key limit reached for this plan',
+    request_id: 'req_409',
+  },
 });
 
 export const KEY_NOT_FOUND_404 = JSON.stringify({
   error: { code: 'not_found', message: 'API key not found', request_id: 'req_404' },
 });
 
-export const DELETE_KEY_OK = JSON.stringify({ ok: true, id: 'key_1', deleted: true, deletion: 'soft' });
+export const DELETE_KEY_OK = JSON.stringify({
+  ok: true,
+  id: 'key_1',
+  deleted: true,
+  deletion: 'soft',
+});
 
 export const RATE_LIMIT_429 = JSON.stringify({
   error: {
@@ -268,16 +281,52 @@ export const WINDOWS_BODY_EXHAUSTED = JSON.stringify({
  */
 const USAGE_ROWS: Record<number, Array<Record<string, string>>> = {
   1: [
-    { date: '2026-10-05', total_requests: '183', total_input_tokens: '2800000', total_output_tokens: '1100000', total_spend: '1.420000' },
+    {
+      date: '2026-10-05',
+      total_requests: '183',
+      total_input_tokens: '2800000',
+      total_output_tokens: '1100000',
+      total_spend: '1.420000',
+    },
   ],
   7: [
-    { date: '2026-10-05', total_requests: '204', total_input_tokens: '3100000', total_output_tokens: '1200000', total_spend: '1.600000' },
-    { date: '2026-10-04', total_requests: '1000', total_input_tokens: '15000000', total_output_tokens: '6000000', total_spend: '7.500000' },
+    {
+      date: '2026-10-05',
+      total_requests: '204',
+      total_input_tokens: '3100000',
+      total_output_tokens: '1200000',
+      total_spend: '1.600000',
+    },
+    {
+      date: '2026-10-04',
+      total_requests: '1000',
+      total_input_tokens: '15000000',
+      total_output_tokens: '6000000',
+      total_spend: '7.500000',
+    },
   ],
   30: [
-    { date: '2026-10-05', total_requests: '204', total_input_tokens: '3100000', total_output_tokens: '1200000', total_spend: '1.600000' },
-    { date: '2026-10-04', total_requests: '1000', total_input_tokens: '15000000', total_output_tokens: '6000000', total_spend: '7.500000' },
-    { date: '2026-09-28', total_requests: '100', total_input_tokens: '2000000', total_output_tokens: '500000', total_spend: '0.800000' },
+    {
+      date: '2026-10-05',
+      total_requests: '204',
+      total_input_tokens: '3100000',
+      total_output_tokens: '1200000',
+      total_spend: '1.600000',
+    },
+    {
+      date: '2026-10-04',
+      total_requests: '1000',
+      total_input_tokens: '15000000',
+      total_output_tokens: '6000000',
+      total_spend: '7.500000',
+    },
+    {
+      date: '2026-09-28',
+      total_requests: '100',
+      total_input_tokens: '2000000',
+      total_output_tokens: '500000',
+      total_spend: '0.800000',
+    },
   ],
 };
 
@@ -330,9 +379,24 @@ export const MODELS_BODY = JSON.stringify({
 
 /** Detail flavor: limits is raw JSONB ({} on the real gateway). */
 export function modelDetailBody(id: string, limits: Record<string, unknown> = {}): string {
-  const known: Record<string, { provider: string; status: string; input: string; output: string; display_name: string }> = {
-    'glm-5.3-flash': { provider: 'openai', status: 'active', input: '0.300000', output: '0.600000', display_name: 'GLM 5.3 Flash' },
-    'claude-haiku-4.5': { provider: 'anthropic', status: 'active', input: '1.000000', output: '5.000000', display_name: 'Claude Haiku 4.5' },
+  const known: Record<
+    string,
+    { provider: string; status: string; input: string; output: string; display_name: string }
+  > = {
+    'glm-5.3-flash': {
+      provider: 'openai',
+      status: 'active',
+      input: '0.300000',
+      output: '0.600000',
+      display_name: 'GLM 5.3 Flash',
+    },
+    'claude-haiku-4.5': {
+      provider: 'anthropic',
+      status: 'active',
+      input: '1.000000',
+      output: '5.000000',
+      display_name: 'Claude Haiku 4.5',
+    },
   };
   const m = known[id];
   return JSON.stringify({
@@ -414,7 +478,12 @@ export const KEYS_LIST_BODY = JSON.stringify({
 export const KEYS_EMPTY_BODY = JSON.stringify({ keys: [] });
 
 export const DELETE_KEY_SOFT = DELETE_KEY_OK;
-export const DELETE_KEY_HARD = JSON.stringify({ ok: true, id: 'key_2', deleted: true, deletion: 'hard' });
+export const DELETE_KEY_HARD = JSON.stringify({
+  ok: true,
+  id: 'key_2',
+  deleted: true,
+  deletion: 'hard',
+});
 
 // ---------------------------------------------------------------------------
 // Phase 3: chat streaming fixtures — shaped EXACTLY per the wire reference:
@@ -443,7 +512,11 @@ const CHAT_ROLE_CHUNK = {
 export const CHAT_STREAM_FULL: string[] = [
   sseData(CHAT_ROLE_CHUNK),
   ': keep-alive\n\n',
-  sseData({ choices: [{ index: 0, delta: { reasoning_content: '(thinking about it)' }, finish_reason: null }] }),
+  sseData({
+    choices: [
+      { index: 0, delta: { reasoning_content: '(thinking about it)' }, finish_reason: null },
+    ],
+  }),
   sseData({ choices: [{ index: 0, delta: { content: 'Hello, ' }, finish_reason: null }] }),
   sseData({ choices: [{ index: 0, delta: { content: 'world!' }, finish_reason: null }] }),
   sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
@@ -469,7 +542,9 @@ export const CHAT_STREAM_SPLIT: string[] = (() => {
 /** include_usage:false wire shape: a single finish chunk carrying only gateway. No footer. */
 export const CHAT_STREAM_NO_USAGE: string[] = [
   sseData(CHAT_ROLE_CHUNK),
-  sseData({ choices: [{ index: 0, delta: { content: 'No footer for this one.' }, finish_reason: null }] }),
+  sseData({
+    choices: [{ index: 0, delta: { content: 'No footer for this one.' }, finish_reason: null }],
+  }),
   sseData({
     choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
     gateway: { charge: '0.001000', request_id: 'req_chat_no_usage' },
@@ -495,7 +570,9 @@ export const CHAT_STREAM_INBAND_ERROR: string[] = [
 export const CHAT_STREAM_SECOND: string[] = [
   sseData(CHAT_ROLE_CHUNK),
   sseData({ choices: [{ index: 0, delta: { content: 'Second reply, ' }, finish_reason: null }] }),
-  sseData({ choices: [{ index: 0, delta: { content: 'after the switch.' }, finish_reason: null }] }),
+  sseData({
+    choices: [{ index: 0, delta: { content: 'after the switch.' }, finish_reason: null }],
+  }),
   sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
   sseData({
     choices: [],
@@ -519,7 +596,11 @@ export const CHAT_STREAM_HANG: string[] = [
  */
 export const CHAT_STREAM_TOOL_CALLS: string[] = [
   sseData(CHAT_ROLE_CHUNK),
-  sseData({ choices: [{ index: 0, delta: { content: 'I would read a file for that.' }, finish_reason: null }] }),
+  sseData({
+    choices: [
+      { index: 0, delta: { content: 'I would read a file for that.' }, finish_reason: null },
+    ],
+  }),
   sseData({
     choices: [
       {

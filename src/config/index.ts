@@ -132,7 +132,8 @@ export function resolveSettings(
   const envUrl = env['SELORA_API_URL'];
   const envKey = env['SELORA_API_KEY'];
   return {
-    apiUrl: envUrl !== undefined && envUrl.trim() !== '' ? envUrl : (config.apiUrl ?? DEFAULT_API_URL),
+    apiUrl:
+      envUrl !== undefined && envUrl.trim() !== '' ? envUrl : (config.apiUrl ?? DEFAULT_API_URL),
     apiKey: envKey !== undefined && envKey.trim() !== '' ? envKey : config.apiKey,
   };
 }

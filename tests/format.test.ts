@@ -5,7 +5,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatCount, formatDurationCompact, formatTokensCompact, daysLeft } from '../src/format.js';
+import {
+  formatCount,
+  formatDurationCompact,
+  formatTokensCompact,
+  daysLeft,
+} from '../src/format.js';
 import { sumUsageRows } from '../src/commands/usage.js';
 import type { UsageDay } from '../src/api/endpoints/me.js';
 import { formatUsdMicro, microToWireString } from '../src/money.js';
@@ -90,8 +95,20 @@ describe('daysLeft', () => {
 describe('sumUsageRows (BigInt summation of STRING wire numerics)', () => {
   it('sums multiple daily rows exactly', () => {
     const rows: UsageDay[] = [
-      { date: '2026-10-05', total_requests: '204', total_input_tokens: '3100000', total_output_tokens: '1200000', total_spend: '1.600000' },
-      { date: '2026-10-04', total_requests: '1000', total_input_tokens: '15000000', total_output_tokens: '6000000', total_spend: '7.500000' },
+      {
+        date: '2026-10-05',
+        total_requests: '204',
+        total_input_tokens: '3100000',
+        total_output_tokens: '1200000',
+        total_spend: '1.600000',
+      },
+      {
+        date: '2026-10-04',
+        total_requests: '1000',
+        total_input_tokens: '15000000',
+        total_output_tokens: '6000000',
+        total_spend: '7.500000',
+      },
     ];
     const t = sumUsageRows(rows);
     expect(t.requests).toBe(1204n);
@@ -110,7 +127,13 @@ describe('sumUsageRows (BigInt summation of STRING wire numerics)', () => {
   });
   it('malformed numerics contribute nothing rather than NaN', () => {
     const rows: UsageDay[] = [
-      { date: '2026-10-05', total_requests: 'x', total_input_tokens: '', total_output_tokens: '1.5', total_spend: 'garbage' },
+      {
+        date: '2026-10-05',
+        total_requests: 'x',
+        total_input_tokens: '',
+        total_output_tokens: '1.5',
+        total_spend: 'garbage',
+      },
     ];
     const t = sumUsageRows(rows);
     expect(t.requests).toBe(0n);

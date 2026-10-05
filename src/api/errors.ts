@@ -57,8 +57,20 @@ export class SeloraApiError extends Error {
   }
 
   /** JSON shape for --json mode — undefined fields omitted, never null. */
-  toJson(): { kind: ApiErrorKind; message: string; hint?: string; reqId?: string; status?: number } {
-    const out: { kind: ApiErrorKind; message: string; hint?: string; reqId?: string; status?: number } = {
+  toJson(): {
+    kind: ApiErrorKind;
+    message: string;
+    hint?: string;
+    reqId?: string;
+    status?: number;
+  } {
+    const out: {
+      kind: ApiErrorKind;
+      message: string;
+      hint?: string;
+      reqId?: string;
+      status?: number;
+    } = {
       kind: this.kind,
       message: this.message,
     };
@@ -90,14 +102,20 @@ export function decodeErrorEnvelope(bodyText: string): ErrorEnvelope {
   } catch {
     return empty;
   }
-  if (typeof parsed !== 'object' || parsed === null || !Object.hasOwn(parsed, 'error')) return empty;
+  if (typeof parsed !== 'object' || parsed === null || !Object.hasOwn(parsed, 'error'))
+    return empty;
   const err = (parsed as Record<string, unknown>)['error'];
   if (typeof err !== 'object' || err === null) return empty;
   const rec = err as Record<string, unknown>;
-  const code = Object.hasOwn(rec, 'code') && typeof rec['code'] === 'string' ? rec['code'] : undefined;
+  const code =
+    Object.hasOwn(rec, 'code') && typeof rec['code'] === 'string' ? rec['code'] : undefined;
   const message =
-    Object.hasOwn(rec, 'message') && typeof rec['message'] === 'string' ? rec['message'] : undefined;
-  const retryRaw = Object.hasOwn(rec, 'retry_after_seconds') ? rec['retry_after_seconds'] : undefined;
+    Object.hasOwn(rec, 'message') && typeof rec['message'] === 'string'
+      ? rec['message']
+      : undefined;
+  const retryRaw = Object.hasOwn(rec, 'retry_after_seconds')
+    ? rec['retry_after_seconds']
+    : undefined;
   const retryAfterSeconds =
     typeof retryRaw === 'number' && Number.isFinite(retryRaw) && retryRaw > 0
       ? Math.ceil(retryRaw)

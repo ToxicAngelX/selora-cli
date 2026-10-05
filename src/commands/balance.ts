@@ -10,7 +10,13 @@
 import type { CliContext } from '../context.js';
 import { resolveSettings } from '../config/index.js';
 import { SeloraClient } from '../api/client.js';
-import { getBalance, getMe, getWindows, type MeResponse, type SpendWindow } from '../api/endpoints/me.js';
+import {
+  getBalance,
+  getMe,
+  getWindows,
+  type MeResponse,
+  type SpendWindow,
+} from '../api/endpoints/me.js';
 import { getStoredKey } from '../auth/storage.js';
 import { Renderer } from '../terminal/render.js';
 import { formatUsd } from '../money.js';
@@ -52,10 +58,19 @@ export async function runBalance(ctx: CliContext): Promise<void> {
   const r = new Renderer({ out: ctx.io.out, err: ctx.io.err, json: ctx.json, debug: ctx.debug });
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   try {
-    const [wallet, windows, me] = await Promise.all([getBalance(client), getWindows(client), getMe(client)]);
+    const [wallet, windows, me] = await Promise.all([
+      getBalance(client),
+      getWindows(client),
+      getMe(client),
+    ]);
     const fetchedAt = new Date();
     if (ctx.json) {
       r.jsonOut({
@@ -76,7 +91,11 @@ export async function runBalance(ctx: CliContext): Promise<void> {
     }
     r.line('SELORA BALANCE');
     r.divider();
-    r.field('Wallet (plan purchases)', wallet !== null && wallet.balance !== '' ? formatUsd(wallet.balance) : '—', LABEL_WIDTH);
+    r.field(
+      'Wallet (plan purchases)',
+      wallet !== null && wallet.balance !== '' ? formatUsd(wallet.balance) : '—',
+      LABEL_WIDTH,
+    );
     r.field('Plan', planLine(me), LABEL_WIDTH);
     r.field('4h window left', windowLine(windows.session, true), LABEL_WIDTH);
     r.field('Weekly window left', windowLine(windows.week, false), LABEL_WIDTH);

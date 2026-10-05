@@ -43,7 +43,8 @@ describe('SeloraClient', () => {
     let calls = 0;
     server.setHandler(() => {
       calls += 1;
-      if (calls === 1) return { status: 429, body: RATE_LIMIT_429, headers: { 'retry-after': '0' } };
+      if (calls === 1)
+        return { status: 429, body: RATE_LIMIT_429, headers: { 'retry-after': '0' } };
       return { status: 200, body: ME_BODY };
     });
     const data = await client().request<unknown>('/v1/me', { retries: 2 });
@@ -52,7 +53,11 @@ describe('SeloraClient', () => {
   });
 
   it('gives up after max retries on persistent 429 and maps rate_limited', async () => {
-    server.setHandler(() => ({ status: 429, body: RATE_LIMIT_429, headers: { 'retry-after': '0' } }));
+    server.setHandler(() => ({
+      status: 429,
+      body: RATE_LIMIT_429,
+      headers: { 'retry-after': '0' },
+    }));
     await expect(client().request('/v1/me', { retries: 1 })).rejects.toMatchObject({
       kind: 'rate_limited',
       status: 429,
@@ -74,7 +79,10 @@ describe('SeloraClient', () => {
 
   it('does NOT retry plain 4xx (401)', async () => {
     server.setHandler(() => ({ status: 401, body: LOGIN_FAIL }));
-    await expect(client().request('/v1/me', {})).rejects.toMatchObject({ kind: 'auth', status: 401 });
+    await expect(client().request('/v1/me', {})).rejects.toMatchObject({
+      kind: 'auth',
+      status: 401,
+    });
     const before = server.requests.length;
     await expect(client().request('/v1/me', {})).rejects.toBeInstanceOf(SeloraApiError);
     expect(server.requests.length).toBe(before + 1);
@@ -88,7 +96,11 @@ describe('SeloraClient', () => {
   });
 
   it('network failure maps to the network error kind', async () => {
-    const dead = new SeloraClient({ baseUrl: 'http://127.0.0.1:1', apiKey: 'sk-gw-TESTdead', debug: false });
+    const dead = new SeloraClient({
+      baseUrl: 'http://127.0.0.1:1',
+      apiKey: 'sk-gw-TESTdead',
+      debug: false,
+    });
     await expect(dead.request('/v1/me', { timeoutMs: 500 })).rejects.toMatchObject({
       kind: 'network',
     });

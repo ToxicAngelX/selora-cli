@@ -32,12 +32,12 @@ session JWTs on `/v1/chat/completions`. With no stored key the command exits
 
 ## Slash commands
 
-| Command | Effect |
-|---|---|
-| `/model` | show the current model |
+| Command       | Effect                                                                        |
+| ------------- | ----------------------------------------------------------------------------- |
+| `/model`      | show the current model                                                        |
 | `/model <id>` | verify `<id>` via `/v1/models/:id`, then switch (404 keeps the current model) |
-| `/help` | list the slash commands |
-| `/exit` | end the session (Ctrl+D at the prompt also works) |
+| `/help`       | list the slash commands                                                       |
+| `/exit`       | end the session (Ctrl+D at the prompt also works)                             |
 
 Empty lines just re-prompt. Unknown slash commands print a hint.
 

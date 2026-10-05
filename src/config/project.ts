@@ -43,7 +43,9 @@ function warnMalformed(): void {
 }
 
 function rec(v: unknown): Record<string, unknown> | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
 }
 
 /** A string array with no non-string entries — else undefined (never invented). */

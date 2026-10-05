@@ -22,7 +22,14 @@ import {
   last4,
   DELETE_KEY_OK,
 } from './mock/fixtures.js';
-import { capturedIo, cleanup, freshEnv, pipedStdin, useApiUrl, type TempEnv } from './helpers/env.js';
+import {
+  capturedIo,
+  cleanup,
+  freshEnv,
+  pipedStdin,
+  useApiUrl,
+  type TempEnv,
+} from './helpers/env.js';
 import { configPath, saveConfig } from '../src/config/index.js';
 import { runLogin } from '../src/commands/login.js';
 import { runLogout } from '../src/commands/logout.js';
@@ -46,11 +53,13 @@ function installRoutes(opts: { loginPassword?: string } = {}): void {
         : { status: 401, body: LOGIN_FAIL };
     }
     if (req.method === 'POST' && req.path === '/v1/me/keys') {
-      if (auth === `Bearer ${FAKE_JWT}`) return { status: 201, body: createKeyBody(FAKE_KEY_CREATED) };
+      if (auth === `Bearer ${FAKE_JWT}`)
+        return { status: 201, body: createKeyBody(FAKE_KEY_CREATED) };
       return { status: 401, body: INVALID_KEY_401 };
     }
     if (req.method === 'GET' && req.path === '/v1/me/keys') {
-      if (auth === `Bearer ${FAKE_KEY_USER}`) return { status: 200, body: keysBody([last4(FAKE_KEY_USER)]) };
+      if (auth === `Bearer ${FAKE_KEY_USER}`)
+        return { status: 200, body: keysBody([last4(FAKE_KEY_USER)]) };
       return { status: 401, body: INVALID_KEY_401 };
     }
     if (req.method === 'DELETE' && req.path === '/v1/me/keys/key_1') {
@@ -190,7 +199,12 @@ describe('whoami', () => {
     expect(capL.all()).toContain(EMAIL);
 
     const { io, cap } = capturedIo();
-    await runWhoami({ debug: false, json: false, apiUrl: server.url, io: { ...io, stdin: pipedStdin([]) } });
+    await runWhoami({
+      debug: false,
+      json: false,
+      apiUrl: server.url,
+      io: { ...io, stdin: pipedStdin([]) },
+    });
     const text = cap.all();
     expect(text).toContain(EMAIL);
     expect(text).toContain('Nova');
@@ -202,7 +216,12 @@ describe('whoami', () => {
     server.setHandler(() => ({ status: 401, body: REVOKED_KEY_401 }));
     const { io, cap } = capturedIo();
     process.exitCode = undefined;
-    await runWhoami({ debug: false, json: false, apiUrl: server.url, io: { ...io, stdin: pipedStdin([]) } });
+    await runWhoami({
+      debug: false,
+      json: false,
+      apiUrl: server.url,
+      io: { ...io, stdin: pipedStdin([]) },
+    });
     const text = cap.all();
     expect(text).toContain('This API key was revoked on 2026-10-01');
     expect(text).toContain('restart the app');
@@ -218,8 +237,16 @@ describe('whoami', () => {
       { key: FAKE_KEY_USER },
     );
     const { io: ioW, cap: capW } = capturedIo();
-    await runWhoami({ debug: false, json: true, apiUrl: server.url, io: { ...ioW, stdin: pipedStdin([]) } });
-    const parsed = JSON.parse(capW.out.join('\n')) as { ok: boolean; wallet?: { balance?: string } };
+    await runWhoami({
+      debug: false,
+      json: true,
+      apiUrl: server.url,
+      io: { ...ioW, stdin: pipedStdin([]) },
+    });
+    const parsed = JSON.parse(capW.out.join('\n')) as {
+      ok: boolean;
+      wallet?: { balance?: string };
+    };
     expect(parsed.ok).toBe(true);
     expect(parsed.wallet?.balance).toBe('42.180000');
   });
@@ -236,7 +263,10 @@ describe('logout', () => {
     expect(readFileSync(configPath(), 'utf8')).toContain(FAKE_KEY_USER);
 
     const { io, cap } = capturedIo();
-    await runLogout({ debug: false, json: false, apiUrl: server.url, io: { ...io, stdin: pipedStdin([]) } }, {});
+    await runLogout(
+      { debug: false, json: false, apiUrl: server.url, io: { ...io, stdin: pipedStdin([]) } },
+      {},
+    );
     expect(cap.all()).toContain('Logged out');
     expect(readFileSync(configPath(), 'utf8')).not.toContain('sk-gw-');
   });
@@ -257,7 +287,9 @@ describe('logout', () => {
     const text = cap.all();
     expect(text).toContain('Revoked');
     expect(text).toContain(last4(FAKE_KEY_USER));
-    const delReq = server.requests.find((r) => r.method === 'DELETE' && r.path.startsWith('/v1/me/keys/'));
+    const delReq = server.requests.find(
+      (r) => r.method === 'DELETE' && r.path.startsWith('/v1/me/keys/'),
+    );
     expect(delReq?.path).toBe('/v1/me/keys/key_1');
     expect(readFileSync(configPath(), 'utf8')).not.toContain('sk-gw-');
   });

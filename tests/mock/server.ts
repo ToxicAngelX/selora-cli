@@ -31,7 +31,10 @@ export interface MockResponse {
   sseHang?: boolean | undefined;
 }
 
-export type MockHandler = (req: CapturedRequest, res: ServerResponse) => MockResponse | Promise<MockResponse>;
+export type MockHandler = (
+  req: CapturedRequest,
+  res: ServerResponse,
+) => MockResponse | Promise<MockResponse>;
 
 export interface MockServer {
   port: number;
@@ -58,7 +61,10 @@ function sleep(ms: number): Promise<void> {
 
 export async function startMockServer(): Promise<MockServer> {
   const requests: CapturedRequest[] = [];
-  let handler: MockHandler = () => ({ status: 404, body: '{"error":{"code":"not_found","message":"no fixture"}}' });
+  let handler: MockHandler = () => ({
+    status: 404,
+    body: '{"error":{"code":"not_found","message":"no fixture"}}',
+  });
   let n = 0;
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {

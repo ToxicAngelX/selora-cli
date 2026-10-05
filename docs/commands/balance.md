@@ -41,8 +41,22 @@ Global: `--debug`, `--json`, `--api-url <url>`.
 ```json
 {
   "ok": true,
-  "wallet": { "balance": "42.180000", "credit_balance": "4.970000", "holds": "0.000000", "available": "42.180000", "credits_expires_at": null },
-  "windows": { "session": { "usedUsd": "1.800000", "limitUsd": "10.000000", "remainingUsd": "8.200000", "...": "..." }, "week": { "...": "..." } },
+  "wallet": {
+    "balance": "42.180000",
+    "credit_balance": "4.970000",
+    "holds": "0.000000",
+    "available": "42.180000",
+    "credits_expires_at": null
+  },
+  "windows": {
+    "session": {
+      "usedUsd": "1.800000",
+      "limitUsd": "10.000000",
+      "remainingUsd": "8.200000",
+      "...": "..."
+    },
+    "week": { "...": "..." }
+  },
   "plan": { "name": "Nova", "kind": "paid", "ends_at": "2026-10-16T12:00:00Z" },
   "fetched_at": "2026-10-05T12:03:44.000Z"
 }

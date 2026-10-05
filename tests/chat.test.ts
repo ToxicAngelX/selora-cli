@@ -69,7 +69,10 @@ async function until(cond: () => boolean, label: string, ms = 3000): Promise<voi
 }
 
 /** Transcript-style io: line writes append s+'\n', raw writes append s — order preserved. */
-function replIo(lines: string[]): { io: CliIo; cap: { out(): string; err(): string; all(): string } } {
+function replIo(lines: string[]): {
+  io: CliIo;
+  cap: { out(): string; err(): string; all(): string };
+} {
   let out = '';
   let err = '';
   const io: CliIo = {
@@ -106,10 +109,14 @@ describe('streamChat', () => {
     server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_FULL }));
     const deltas: string[] = [];
     const reasoning: string[] = [];
-    const result = await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, {
-      onDelta: (t) => deltas.push(t),
-      onReasoning: (t) => reasoning.push(t),
-    });
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      {
+        onDelta: (t) => deltas.push(t),
+        onReasoning: (t) => reasoning.push(t),
+      },
+    );
     expect(deltas.join('')).toBe('Hello, world!');
     expect(reasoning).toEqual(['(thinking about it)']);
     expect(result.finishReason).toBe('stop');
@@ -122,9 +129,13 @@ describe('streamChat', () => {
   it('tool_calls detection is real: a tool_calls delta + finish_reason "tool_calls" set the flag', async () => {
     server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_TOOL_CALLS }));
     const deltas: string[] = [];
-    const result = await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, {
-      onDelta: (t) => deltas.push(t),
-    });
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      {
+        onDelta: (t) => deltas.push(t),
+      },
+    );
     expect(deltas.join('')).toBe('I would read a file for that.');
     expect(result.finishReason).toBe('tool_calls');
     expect(result.toolCallsRequested).toBe(true);
@@ -135,16 +146,24 @@ describe('streamChat', () => {
   it('buffers events split mid-JSON across SSE frames', async () => {
     server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_SPLIT }));
     const deltas: string[] = [];
-    const result = await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, {
-      onDelta: (t) => deltas.push(t),
-    });
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      {
+        onDelta: (t) => deltas.push(t),
+      },
+    );
     expect(deltas.join('')).toBe('Hello, world!');
     expect(result.charge).toBe('0.018234');
   });
 
   it('sends the exact wire body, key auth, and SSE Accept header', async () => {
     server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_FULL }));
-    await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, { onDelta: () => {} });
+    await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      { onDelta: () => {} },
+    );
     const req = server.requests.at(-1)!;
     expect(req.method).toBe('POST');
     expect(req.path).toBe('/v1/chat/completions');
@@ -161,9 +180,13 @@ describe('streamChat', () => {
 
   it('include_usage:false shape: gateway.charge decoded, usage stays undefined', async () => {
     server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_NO_USAGE }));
-    const result = await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, {
-      onDelta: () => {},
-    });
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      {
+        onDelta: () => {},
+      },
+    );
     expect(result.usage).toBeUndefined();
     expect(result.charge).toBe('0.001000');
     expect(result.finishReason).toBe('stop');
@@ -183,11 +206,13 @@ describe('streamChat', () => {
   it('in-band stream error: SeloraApiError with the backend message VERBATIM (reset time included)', async () => {
     server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_INBAND_ERROR }));
     let caught: unknown;
-    await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, { onDelta: () => {} }).catch(
-      (err: unknown) => {
-        caught = err;
-      },
-    );
+    await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      { onDelta: () => {} },
+    ).catch((err: unknown) => {
+      caught = err;
+    });
     expect(caught).toBeInstanceOf(SeloraApiError);
     const e = caught as SeloraApiError;
     expect(e.kind).toBe('http_error');
@@ -203,16 +228,24 @@ describe('streamChat', () => {
       headers: { 'retry-after': '1' },
     }));
     await expect(
-      streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES, retries: 0 }, { onDelta: () => {} }),
+      streamChat(
+        keyClient(),
+        { model: 'glm-5.3-flash', messages: MESSAGES, retries: 0 },
+        { onDelta: () => {} },
+      ),
     ).rejects.toMatchObject({ kind: 'rate_limited', status: 429, retryAfterSeconds: 1 });
   });
 
   it('402 window-exhausted before the stream starts: verbatim message with the reset time', async () => {
     server.setHandler(() => ({ status: 402, body: WINDOW_EXHAUSTED_402 }));
     let caught: unknown;
-    await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES, retries: 0 }, {
-      onDelta: () => {},
-    }).catch((err: unknown) => {
+    await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES, retries: 0 },
+      {
+        onDelta: () => {},
+      },
+    ).catch((err: unknown) => {
       caught = err;
     });
     const e = caught as SeloraApiError;
@@ -224,9 +257,13 @@ describe('streamChat', () => {
   it('401 revoked key: auth_revoked with the verbatim rotation message', async () => {
     server.setHandler(() => ({ status: 401, body: REVOKED_KEY_401 }));
     let caught: unknown;
-    await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES, retries: 0 }, {
-      onDelta: () => {},
-    }).catch((err: unknown) => {
+    await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES, retries: 0 },
+      {
+        onDelta: () => {},
+      },
+    ).catch((err: unknown) => {
       caught = err;
     });
     const e = caught as SeloraApiError;
@@ -237,9 +274,13 @@ describe('streamChat', () => {
   it('non-streaming 2xx fallback: message.content + usage + gateway decoded', async () => {
     server.setHandler(() => ({ status: 200, body: CHAT_COMPLETION_NONSTREAM }));
     const deltas: string[] = [];
-    const result = await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, {
-      onDelta: (t) => deltas.push(t),
-    });
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      {
+        onDelta: (t) => deltas.push(t),
+      },
+    );
     expect(deltas.join('')).toBe('Plain completion reply.');
     expect(result.finishReason).toBe('stop');
     expect(result.usage).toEqual({ promptTokens: 100, completionTokens: 5, totalTokens: 105 });
@@ -260,9 +301,13 @@ describe('streamChat', () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES, signal: controller.signal }, {
-        onDelta: () => {},
-      }),
+      streamChat(
+        keyClient(),
+        { model: 'glm-5.3-flash', messages: MESSAGES, signal: controller.signal },
+        {
+          onDelta: () => {},
+        },
+      ),
     ).rejects.toMatchObject({ kind: 'cancelled', message: 'Request cancelled.' });
   });
 
@@ -272,9 +317,13 @@ describe('streamChat', () => {
       return { status: 200, sse: CHAT_STREAM_FULL };
     });
     await expect(
-      streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES, timeoutMs: 50 }, {
-        onDelta: () => {},
-      }),
+      streamChat(
+        keyClient(),
+        { model: 'glm-5.3-flash', messages: MESSAGES, timeoutMs: 50 },
+        {
+          onDelta: () => {},
+        },
+      ),
     ).rejects.toMatchObject({ kind: 'timeout' });
   });
 });
@@ -379,7 +428,9 @@ describe('chat REPL', () => {
     expect(text).not.toContain('Session ended');
     expect(process.exitCode).toBe(1);
     // no chat request was ever made
-    expect(server.requests.slice(before).some((r) => r.path === '/v1/chat/completions')).toBe(false);
+    expect(server.requests.slice(before).some((r) => r.path === '/v1/chat/completions')).toBe(
+      false,
+    );
   });
 
   it('unknown startup model in --json mode: {ok:false, error:{message:"Model not available"}}', async () => {
@@ -400,7 +451,9 @@ describe('chat REPL', () => {
     const nonTTY: CliIo = { ...io, stdin: Readable.from([]), isTTY: false };
     await runChat(replCtx(nonTTY), {});
     const text = cap.all();
-    expect(text).toContain('✗ selora chat needs an interactive terminal — use: selora run "<prompt>"');
+    expect(text).toContain(
+      '✗ selora chat needs an interactive terminal — use: selora run "<prompt>"',
+    );
     expect(text).not.toContain('Connected to');
     expect(process.exitCode).toBe(1);
   });
@@ -429,11 +482,15 @@ describe('chat REPL', () => {
     const { io, cap } = replIo(['hello', '/exit']);
     const before = server.requests.length;
     let interrupt: (() => void) | undefined;
-    const session = runChat(replCtx(io), {}, {
-      registerInterrupt: (fn) => {
-        interrupt = fn;
+    const session = runChat(
+      replCtx(io),
+      {},
+      {
+        registerInterrupt: (fn) => {
+          interrupt = fn;
+        },
       },
-    });
+    );
     // wait until the first delta actually rendered, then "press Ctrl+C"
     await until(() => cap.out().includes('Star'), 'first delta rendered');
     expect(typeof interrupt).toBe('function');
@@ -443,7 +500,9 @@ describe('chat REPL', () => {
     expect(text).toContain('· Request cancelled — session kept');
     expect(text).toContain('✓ Session ended');
     // exactly one chat request: the aborted pair was dropped, nothing retried
-    expect(server.requests.slice(before).filter((r) => r.path === '/v1/chat/completions').length).toBe(1);
+    expect(
+      server.requests.slice(before).filter((r) => r.path === '/v1/chat/completions').length,
+    ).toBe(1);
     expect(process.exitCode).toBeUndefined();
   });
 

@@ -53,7 +53,11 @@ class MutedWritable extends Writable {
     this.muted = false;
   }
 
-  override _write(chunk: string | Buffer, _enc: BufferEncoding, cb: (err?: Error | null) => void): void {
+  override _write(
+    chunk: string | Buffer,
+    _enc: BufferEncoding,
+    cb: (err?: Error | null) => void,
+  ): void {
     if (!this.muted) this.dest(chunk.toString());
     cb();
   }

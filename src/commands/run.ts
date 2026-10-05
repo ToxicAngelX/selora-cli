@@ -38,7 +38,8 @@ export interface RunFlags {
   cwd?: string | undefined;
 }
 
-type ModelSource = '--model flag' | 'project selora.json' | 'global default model' | 'built-in default';
+type ModelSource =
+  '--model flag' | 'project selora.json' | 'global default model' | 'built-in default';
 
 /**
  * --model flag > project selora.json (cwd) > global defaultModel >
@@ -49,13 +50,19 @@ function resolveModel(flags: RunFlags): { model: string; source: ModelSource } {
   const flagModel = flags.model !== undefined ? flags.model.trim() : '';
   if (flagModel !== '') return { model: flagModel, source: '--model flag' };
   const project = loadProjectConfig(flags.cwd ?? process.cwd()).model;
-  if (project !== undefined && project !== '') return { model: project, source: 'project selora.json' };
+  if (project !== undefined && project !== '')
+    return { model: project, source: 'project selora.json' };
   const globalDefault = loadConfig().defaultModel;
-  if (globalDefault !== undefined && globalDefault !== '') return { model: globalDefault, source: 'global default model' };
+  if (globalDefault !== undefined && globalDefault !== '')
+    return { model: globalDefault, source: 'global default model' };
   return { model: DEFAULT_MODEL_FALLBACK, source: 'built-in default' };
 }
 
-export async function runRun(ctx: CliContext, prompt: string | undefined, flags: RunFlags): Promise<void> {
+export async function runRun(
+  ctx: CliContext,
+  prompt: string | undefined,
+  flags: RunFlags,
+): Promise<void> {
   const r = new Renderer({
     out: ctx.io.out,
     err: ctx.io.err,
@@ -75,7 +82,9 @@ export async function runRun(ctx: CliContext, prompt: string | undefined, flags:
 
   // Same fail-fast as chat: /v1/chat/completions is API-key-only.
   if (getStoredKey() === undefined) {
-    r.renderError(new SeloraApiError({ kind: 'auth', message: 'You are not logged in. Run: selora login' }));
+    r.renderError(
+      new SeloraApiError({ kind: 'auth', message: 'You are not logged in. Run: selora login' }),
+    );
     return;
   }
 
@@ -84,7 +93,12 @@ export async function runRun(ctx: CliContext, prompt: string | undefined, flags:
 
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   // Single user message, in-memory only — never written anywhere.
   let content = '';

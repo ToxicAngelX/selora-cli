@@ -39,7 +39,7 @@ conversations belong to `selora chat`.
 
 ## Tool-call honesty
 
-If the model *actually* requested tools on the wire — any delta carrying
+If the model _actually_ requested tools on the wire — any delta carrying
 `tool_calls` or a finish chunk with `finish_reason: "tool_calls"` — the reply
 is followed by a gray stderr line:
 

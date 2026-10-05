@@ -9,6 +9,9 @@ import { hostname } from 'node:os';
 const KEYNAME_PREFIX = 'selora-cli-';
 
 export function suggestedKeyName(): string {
-  const host = hostname().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 100);
+  const host = hostname()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .slice(0, 100);
   return `${KEYNAME_PREFIX}${host}`;
 }

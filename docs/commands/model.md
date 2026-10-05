@@ -60,7 +60,15 @@ With an id (success):
 ```json
 {
   "ok": true,
-  "model": { "id": "glm-5.3-flash", "provider": "openai", "status": "active", "pricing": { "input_per_1m": "0.300000", "output_per_1m": "0.600000" }, "limits": {}, "metadata": {}, "display_name": "GLM 5.3 Flash" },
+  "model": {
+    "id": "glm-5.3-flash",
+    "provider": "openai",
+    "status": "active",
+    "pricing": { "input_per_1m": "0.300000", "output_per_1m": "0.600000" },
+    "limits": {},
+    "metadata": {},
+    "display_name": "GLM 5.3 Flash"
+  },
   "default_model_set": "glm-5.3-flash"
 }
 ```

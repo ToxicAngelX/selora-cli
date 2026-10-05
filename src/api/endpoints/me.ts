@@ -168,7 +168,9 @@ function strArray(rec: Record<string, unknown>, key: string): string[] {
 }
 
 function rec(v: unknown): Record<string, unknown> | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
 }
 
 export async function getMe(client: SeloraClient): Promise<MeResponse> {
@@ -353,7 +355,11 @@ export async function getUsage(client: SeloraClient, days = 30): Promise<UsageRe
         .map((row) => {
           const r = rec(row);
           if (r === null) return null;
-          return { model_id: str(r, 'model_id'), requests: num(r, 'requests'), spend: str(r, 'spend') };
+          return {
+            model_id: str(r, 'model_id'),
+            requests: num(r, 'requests'),
+            spend: str(r, 'spend'),
+          };
         })
         .filter((x): x is UsageByModel => x !== null)
     : [];
@@ -432,7 +438,8 @@ export async function createKey(
             revoked_at: nullableStr(apiKey, 'revoked_at') ?? undefined,
             model_ids: strArray(apiKey, 'model_ids'),
             rate_limit_rpm:
-              Object.hasOwn(apiKey, 'rate_limit_rpm') && typeof apiKey['rate_limit_rpm'] === 'number'
+              Object.hasOwn(apiKey, 'rate_limit_rpm') &&
+              typeof apiKey['rate_limit_rpm'] === 'number'
                 ? apiKey['rate_limit_rpm']
                 : null,
             emoji: nullableStr(apiKey, 'emoji'),
@@ -444,10 +451,7 @@ export async function createKey(
   };
 }
 
-export async function deleteKey(
-  client: SeloraClient,
-  id: string,
-): Promise<DeleteKeyResponse> {
+export async function deleteKey(client: SeloraClient, id: string): Promise<DeleteKeyResponse> {
   const res = await client.request<unknown>(`/v1/me/keys/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     auth: 'key',

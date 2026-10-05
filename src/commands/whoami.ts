@@ -23,7 +23,13 @@ export async function runWhoami(ctx: CliContext): Promise<void> {
   try {
     const me = await getMe(client);
     if (ctx.json) {
-      r.jsonOut({ ok: true, user: me.user, plan: me.plan, plan_term: me.plan_term, wallet: me.wallet });
+      r.jsonOut({
+        ok: true,
+        user: me.user,
+        plan: me.plan,
+        plan_term: me.plan_term,
+        wallet: me.wallet,
+      });
       return;
     }
     r.line('selora — account');

@@ -19,9 +19,9 @@ describe('redact()', () => {
   });
 
   it('redacts session tokens in login response bodies (debug logs response bodies)', () => {
-    expect(redact('{"user":{"id":"usr_1"},"token":"testsession.TESTfakejwt","expires_at":123}')).toBe(
-      '{"user":{"id":"usr_1"},"token":"…redacted","expires_at":123}',
-    );
+    expect(
+      redact('{"user":{"id":"usr_1"},"token":"testsession.TESTfakejwt","expires_at":123}'),
+    ).toBe('{"user":{"id":"usr_1"},"token":"…redacted","expires_at":123}');
   });
 
   it('handles multiple occurrences and mixed content', () => {

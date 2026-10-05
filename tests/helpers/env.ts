@@ -11,7 +11,16 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach } from 'vitest';
 import type { CliIo } from '../../src/context.js';
 
-const KEYS = ['XDG_CONFIG_HOME', 'APPDATA', 'HOME', 'SELORA_API_URL', 'SELORA_API_KEY', 'NO_COLOR', 'TERM'];
+const KEYS = [
+  'XDG_CONFIG_HOME',
+  'APPDATA',
+  'HOME',
+  'SELORA_API_URL',
+  'SELORA_API_KEY',
+  'NO_COLOR',
+  'TERM',
+  'SHELL',
+];
 
 export interface TempEnv {
   dir: string;

@@ -2,7 +2,7 @@
 
 Write a project-local `selora.json` in the **current directory** — distinct
 from the global XDG config (`~/.config/selora/config.json`), which keeps the
-API key and the global default model. `selora.json` is the *project's*
+API key and the global default model. `selora.json` is the _project's_
 configuration: its model choice and the context globs for the future agent.
 
 ```
@@ -30,7 +30,7 @@ The file content (2-space JSON, trailing newline):
 `glm-5.3-flash`.
 
 The model is **verified** via the public `GET /v1/models/:id` route with NO
-Authorization header (the pricing-bearing internal flavor) *before* anything
+Authorization header (the pricing-bearing internal flavor) _before_ anything
 is written. An unknown id prints the backend's honest 404 message
 (`Model not available`) plus a `selora models` hint and exits 1 — **no file
 is written**.

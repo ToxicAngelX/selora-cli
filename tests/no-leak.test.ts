@@ -29,7 +29,14 @@ import {
   modelDetailBody,
   DELETE_KEY_OK,
 } from './mock/fixtures.js';
-import { capturedIo, cleanup, freshEnv, pipedStdin, useApiUrl, type TempEnv } from './helpers/env.js';
+import {
+  capturedIo,
+  cleanup,
+  freshEnv,
+  pipedStdin,
+  useApiUrl,
+  type TempEnv,
+} from './helpers/env.js';
 import { saveConfig } from '../src/config/index.js';
 import { runLogin } from '../src/commands/login.js';
 import { runLogout } from '../src/commands/logout.js';
@@ -59,7 +66,9 @@ function installRoutes(): void {
     const auth = req.headers['authorization'] ?? '';
     if (req.method === 'POST' && req.path === '/v1/auth/login') {
       const body = JSON.parse(req.body) as { password?: unknown };
-      return body.password === PASSWORD ? { status: 200, body: LOGIN_SUCCESS } : { status: 401, body: LOGIN_SUCCESS };
+      return body.password === PASSWORD
+        ? { status: 200, body: LOGIN_SUCCESS }
+        : { status: 401, body: LOGIN_SUCCESS };
     }
     if (req.method === 'POST' && req.path === '/v1/me/keys') {
       // The server briefly sees the session token; the response carries the
@@ -88,7 +97,9 @@ function assertNoLeak(output: string, label: string): void {
   expect(realKeyMatch, `${label}: real-looking key leaked`).toBeNull();
   expect(output.includes(FAKE_JWT), `${label}: session JWT leaked`).toBe(false);
   expect(output.includes(`Bearer ${FAKE_KEY_USER}`), `${label}: Bearer key leaked`).toBe(false);
-  expect(output.includes(`Bearer ${FAKE_KEY_CREATED}`), `${label}: Bearer created key leaked`).toBe(false);
+  expect(output.includes(`Bearer ${FAKE_KEY_CREATED}`), `${label}: Bearer created key leaked`).toBe(
+    false,
+  );
   expect(output.includes(REAL_LOOKING_KEY), `${label}: synthetic real key leaked`).toBe(false);
 }
 

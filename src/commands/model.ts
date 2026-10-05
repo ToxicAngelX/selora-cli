@@ -44,7 +44,11 @@ function renderLimits(r: Renderer, limits: Record<string, unknown>): void {
   }
 }
 
-export async function runModel(ctx: CliContext, id: string | undefined, flags: ModelFlags): Promise<void> {
+export async function runModel(
+  ctx: CliContext,
+  id: string | undefined,
+  flags: ModelFlags,
+): Promise<void> {
   const r = new Renderer({ out: ctx.io.out, err: ctx.io.err, json: ctx.json, debug: ctx.debug });
 
   if (flags.unset === true) {
@@ -78,7 +82,12 @@ export async function runModel(ctx: CliContext, id: string | undefined, flags: M
 
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   try {
     const m = await getModel(client, id.trim());

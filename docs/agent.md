@@ -9,7 +9,7 @@ to discover the gaps by being surprised.
 - **The Tool interface** — `src/agent/tool.ts`:
   `Tool { name, description, permissionLabel(input), run(input, ctx) }` with
   `ToolContext { cwd }` and `ToolResult { ok, summary }`. `run` receives a
-  `dryRun` flag: in dry-run it only *describes* what would happen.
+  `dryRun` flag: in dry-run it only _describes_ what would happen.
 - **The registry** — `src/agent/registry.ts`: `registerTool(tool)` /
   `listTools()`. It registers **NOTHING** in v0.1 (`listTools()` returns `[]`,
   pinned by test). It is library-only — there is deliberately **no
@@ -17,7 +17,7 @@ to discover the gaps by being surprised.
   features that do not exist.
 - **Real tool-call detection in `selora run`** — the streaming decoder
   (`src/api/endpoints/chat.ts`) sets `toolCallsRequested` when the model
-  *actually* requested tools on the wire: any delta carrying `tool_calls`, or
+  _actually_ requested tools on the wire: any delta carrying `tool_calls`, or
   a finish chunk with `finish_reason: "tool_calls"`. When that happens, `run`
   prints the honest gray line
   `· agent mode not implemented yet — see docs/agent.md`. This is wire-based
@@ -34,14 +34,14 @@ to discover the gaps by being surprised.
    must carry the tool definitions and return tool calls the CLI can decode.
    The current wire reference documents `delta: {tool_calls}` and
    `finish_reason: "tool_calls"` arriving from the gateway, but a
-   *request-side* tools parameter is **not yet verified** against the real
+   _request-side_ tools parameter is **not yet verified** against the real
    gateway — that must be confirmed (read-only recon of `/root/backend`)
    before any client code is written. No fields may be invented.
 2. **Permission prompt UI.** Before any tool executes, the user sees
    `Tool.permissionLabel(input)` and must approve. The `Tool.run` contract is
    "never called without the permission gate".
 3. **The dry-run contract.** First execution is always `dryRun: true` — the
-   tool reports what it *would* do (`ToolResult.summary`); only after the user
+   tool reports what it _would_ do (`ToolResult.summary`); only after the user
    approves does the real execution happen.
 4. **File/exec tools with sandboxing.** Read/write/execute tools scoped to
    `ToolContext.cwd` and the `context.include`/`exclude` globs from

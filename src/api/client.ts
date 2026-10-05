@@ -242,7 +242,10 @@ export class SeloraClient {
 
       const ttfbController = new AbortController();
       const userSignal = opts.signal;
-      const signal = userSignal === undefined ? ttfbController.signal : AbortSignal.any([ttfbController.signal, userSignal]);
+      const signal =
+        userSignal === undefined
+          ? ttfbController.signal
+          : AbortSignal.any([ttfbController.signal, userSignal]);
       const timer = setTimeout(() => ttfbController.abort(), timeoutMs);
       const started = Date.now();
 
@@ -383,7 +386,10 @@ export class SeloraClient {
     }
     if (this.apiKey === undefined || this.apiKey === '') {
       // Matches the 401 'auth' shape so callers render the login guidance.
-      throw new SeloraApiError({ kind: 'auth', message: 'You are not logged in. Run: selora login' });
+      throw new SeloraApiError({
+        kind: 'auth',
+        message: 'You are not logged in. Run: selora login',
+      });
     }
     return `Bearer ${this.apiKey}`;
   }
@@ -401,7 +407,12 @@ export class SeloraClient {
     return status >= 500;
   }
 
-  private retryDelayMs(status: number, bodyText: string, headers: Headers, retriesUsed: number): number {
+  private retryDelayMs(
+    status: number,
+    bodyText: string,
+    headers: Headers,
+    retriesUsed: number,
+  ): number {
     if (status === 429) {
       const fromHeader = parseRetryAfterSeconds(headers.get('retry-after'));
       let fromBody: number | undefined;
@@ -413,8 +424,11 @@ export class SeloraClient {
             const err = rec['error'];
             if (typeof err === 'object' && err !== null) {
               const e = err as Record<string, unknown>;
-              const raw = Object.hasOwn(e, 'retry_after_seconds') ? e['retry_after_seconds'] : undefined;
-              if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) fromBody = Math.ceil(raw);
+              const raw = Object.hasOwn(e, 'retry_after_seconds')
+                ? e['retry_after_seconds']
+                : undefined;
+              if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0)
+                fromBody = Math.ceil(raw);
             }
           }
         }

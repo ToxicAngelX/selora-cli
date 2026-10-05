@@ -58,11 +58,14 @@ describe('loadProjectConfig', () => {
   it('valid file → model + context', () => {
     const dir = tempDir();
     try {
-      writeProject(dir, JSON.stringify({
-        version: 1,
-        model: 'gpt-5.2-mini',
-        context: { include: ['src/**/*'], exclude: ['**/dist/**'] },
-      }));
+      writeProject(
+        dir,
+        JSON.stringify({
+          version: 1,
+          model: 'gpt-5.2-mini',
+          context: { include: ['src/**/*'], exclude: ['**/dist/**'] },
+        }),
+      );
       expect(loadProjectConfig(dir)).toEqual({
         model: 'gpt-5.2-mini',
         context: { include: ['src/**/*'], exclude: ['**/dist/**'] },
@@ -75,12 +78,15 @@ describe('loadProjectConfig', () => {
   it('extra/unknown fields are ignored; version is not surfaced', () => {
     const dir = tempDir();
     try {
-      writeProject(dir, JSON.stringify({
-        version: 1,
-        model: 'glm-5.3-flash',
-        future: { agent: true },
-        context: { include: ['a'], exclude: ['b'], extra: 1 },
-      }));
+      writeProject(
+        dir,
+        JSON.stringify({
+          version: 1,
+          model: 'glm-5.3-flash',
+          future: { agent: true },
+          context: { include: ['a'], exclude: ['b'], extra: 1 },
+        }),
+      );
       expect(loadProjectConfig(dir)).toEqual({
         model: 'glm-5.3-flash',
         context: { include: ['a'], exclude: ['b'] },
@@ -93,11 +99,14 @@ describe('loadProjectConfig', () => {
   it('wrong shapes degrade honestly: bad model ignored, half-shaped context dropped entirely', () => {
     const dir = tempDir();
     try {
-      writeProject(dir, JSON.stringify({
-        version: 1,
-        model: 123,
-        context: { include: ['src/**/*'] }, // exclude missing → whole context ignored
-      }));
+      writeProject(
+        dir,
+        JSON.stringify({
+          version: 1,
+          model: 123,
+          context: { include: ['src/**/*'] }, // exclude missing → whole context ignored
+        }),
+      );
       expect(loadProjectConfig(dir)).toEqual({});
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -107,10 +116,13 @@ describe('loadProjectConfig', () => {
   it('empty-string model and non-string array entries are ignored', () => {
     const dir = tempDir();
     try {
-      writeProject(dir, JSON.stringify({
-        model: '',
-        context: { include: ['a', 5], exclude: ['b'] },
-      }));
+      writeProject(
+        dir,
+        JSON.stringify({
+          model: '',
+          context: { include: ['a', 5], exclude: ['b'] },
+        }),
+      );
       expect(loadProjectConfig(dir)).toEqual({});
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -137,7 +149,10 @@ describe('loadProjectConfig', () => {
       // and it reads back
       expect(loadProjectConfig(dir)).toEqual({
         model: 'glm-5.3-flash',
-        context: { include: ['src/**/*', 'docs/**/*.md'], exclude: ['**/node_modules/**', '**/dist/**'] },
+        context: {
+          include: ['src/**/*', 'docs/**/*.md'],
+          exclude: ['**/node_modules/**', '**/dist/**'],
+        },
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -26,7 +26,14 @@ import {
   modelDetailBody,
   usageBody,
 } from './mock/fixtures.js';
-import { capturedIo, cleanup, freshEnv, pipedStdin, useApiUrl, type TempEnv } from './helpers/env.js';
+import {
+  capturedIo,
+  cleanup,
+  freshEnv,
+  pipedStdin,
+  useApiUrl,
+  type TempEnv,
+} from './helpers/env.js';
 import { loadConfig, saveConfig } from '../src/config/index.js';
 import { storeKey } from '../src/auth/storage.js';
 import { runBalance } from '../src/commands/balance.js';
@@ -81,14 +88,18 @@ function installRoutes(opts: RouteOpts = {}): void {
       const id = decodeURIComponent(req.path.slice('/v1/models/'.length));
       if (id === 'no-such-model') return { status: 404, body: MODEL_NOT_FOUND_404 };
       if (req.headers['authorization'] !== undefined) return { status: 401, body: INVALID_KEY_401 };
-      return { status: 200, body: modelDetailBody(id, id === 'claude-haiku-4.5' ? { max_output_tokens: 65536 } : {}) };
+      return {
+        status: 200,
+        body: modelDetailBody(id, id === 'claude-haiku-4.5' ? { max_output_tokens: 65536 } : {}),
+      };
     }
     if (req.method === 'GET' && req.path === '/v1/me/keys') {
       if (req.headers['authorization'] === AUTH_OK) return { status: 200, body: KEYS_LIST_BODY };
       return { status: 401, body: INVALID_KEY_401 };
     }
     if (req.method === 'POST' && req.path === '/v1/me/keys') {
-      if (req.headers['authorization'] === AUTH_OK) return { status: 201, body: createKeyBody(FAKE_KEY_CREATED) };
+      if (req.headers['authorization'] === AUTH_OK)
+        return { status: 201, body: createKeyBody(FAKE_KEY_CREATED) };
       return { status: 409, body: KEY_LIMIT_409 };
     }
     if (req.method === 'DELETE' && req.path === '/v1/me/keys/key_1') {
@@ -171,7 +182,10 @@ describe('balance', () => {
     const parsed = JSON.parse(cap.out.join('\n')) as {
       ok: boolean;
       wallet?: { balance?: string };
-      windows?: { session?: { remainingUsd?: string; resetsInMs?: number }; week?: { remainingUsd?: string } };
+      windows?: {
+        session?: { remainingUsd?: string; resetsInMs?: number };
+        week?: { remainingUsd?: string };
+      };
       plan?: { name?: string; kind?: string; ends_at?: string };
       fetched_at?: string;
     };
@@ -323,7 +337,11 @@ describe('models', () => {
     await promise;
     const parsed = JSON.parse(cap.out.join('\n')) as {
       ok: boolean;
-      models?: Array<{ id: string; pricing?: { input_per_1m: string }; supports_1m_context?: boolean }>;
+      models?: Array<{
+        id: string;
+        pricing?: { input_per_1m: string };
+        supports_1m_context?: boolean;
+      }>;
     };
     expect(parsed.ok).toBe(true);
     const glm = parsed.models?.find((m) => m.id === 'glm-5.3-flash');
@@ -424,7 +442,8 @@ describe('keys', () => {
 
   it('list with no keys: honest empty state', async () => {
     server.setHandler((req) => {
-      if (req.method === 'GET' && req.path === '/v1/me/keys') return { status: 200, body: KEYS_EMPTY_BODY };
+      if (req.method === 'GET' && req.path === '/v1/me/keys')
+        return { status: 200, body: KEYS_EMPTY_BODY };
       return { status: 404, body: '{"error":{"code":"not_found","message":"no fixture"}}' };
     });
     const { promise, cap } = run((c) => runKeys(c, undefined, undefined, {}));
@@ -448,7 +467,8 @@ describe('keys', () => {
   it('create --name: uses the given name; 409 → backend message + revoke hint', async () => {
     installRoutes();
     server.setHandler((req) => {
-      if (req.method === 'POST' && req.path === '/v1/me/keys') return { status: 409, body: KEY_LIMIT_409 };
+      if (req.method === 'POST' && req.path === '/v1/me/keys')
+        return { status: 409, body: KEY_LIMIT_409 };
       return { status: 404, body: '{"error":{"code":"not_found","message":"no fixture"}}' };
     });
     process.exitCode = undefined;
@@ -476,7 +496,9 @@ describe('keys', () => {
     const { promise, cap } = run((c) => runKeys(c, 'revoke', 'key_1', { yes: true }));
     await promise;
     expect(cap.all()).toContain('soft delete');
-    const del = server.requests.find((r) => r.method === 'DELETE' && r.path === '/v1/me/keys/key_1');
+    const del = server.requests.find(
+      (r) => r.method === 'DELETE' && r.path === '/v1/me/keys/key_1',
+    );
     expect(del).toBeDefined();
   });
 
@@ -485,7 +507,9 @@ describe('keys', () => {
     const { promise, cap } = run((c) => runKeys(c, 'revoke', '…WXYZ', { yes: true }));
     await promise;
     expect(cap.all()).toContain('hard delete');
-    expect(server.requests.some((r) => r.method === 'DELETE' && r.path === '/v1/me/keys/key_2')).toBe(true);
+    expect(
+      server.requests.some((r) => r.method === 'DELETE' && r.path === '/v1/me/keys/key_2'),
+    ).toBe(true);
   });
 
   it('revoke 404 → already-gone message', async () => {

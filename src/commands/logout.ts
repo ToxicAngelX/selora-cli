@@ -107,7 +107,12 @@ async function logoutWithRevoke(
       // The key is already dead/revoked server-side — still honor logout.
       clearStoredKey();
       if (ctx.json) {
-        r.jsonOut({ ok: true, loggedOut: true, revoked: false, note: 'Key no longer valid server-side.' });
+        r.jsonOut({
+          ok: true,
+          loggedOut: true,
+          revoked: false,
+          note: 'Key no longer valid server-side.',
+        });
       } else {
         r.fail(err.apiMessage ?? err.message);
         r.bullet('Cleared the local key — it is no longer accepted by the Selora API.');

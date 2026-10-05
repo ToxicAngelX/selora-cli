@@ -30,4 +30,4 @@ jobs:
         shell: bash
         run: |
           npm pack
-          node scripts/check-pack-size.mjs selora-0.1.0.tgz
+          node scripts/check-pack-size.mjs selora-*.tgz

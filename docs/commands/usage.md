@@ -52,8 +52,13 @@ With a range flag:
 {
   "ok": true,
   "days": 1,
-  "totals": { "requests": "183", "input_tokens": "2800000", "output_tokens": "1100000", "spend": "1.420000" },
-  "summary": [ { "date": "2026-10-05", "total_requests": "183", "...": "..." } ]
+  "totals": {
+    "requests": "183",
+    "input_tokens": "2800000",
+    "output_tokens": "1100000",
+    "spend": "1.420000"
+  },
+  "summary": [{ "date": "2026-10-05", "total_requests": "183", "...": "..." }]
 }
 ```
 
@@ -63,8 +68,8 @@ Without a flag (both ranges):
 {
   "ok": true,
   "ranges": [
-    { "days": 1, "label": "Today", "totals": { "...": "..." }, "summary": [ ] },
-    { "days": 7, "label": "This week", "totals": { "...": "..." }, "summary": [ ] }
+    { "days": 1, "label": "Today", "totals": { "...": "..." }, "summary": [] },
+    { "days": 7, "label": "This week", "totals": { "...": "..." }, "summary": [] }
   ]
 }
 ```

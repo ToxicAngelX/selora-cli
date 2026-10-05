@@ -30,7 +30,7 @@ export function formatTokensCompact(n: bigint): string {
   for (const [scale, suffix] of units) {
     if (n >= scale) {
       const whole = n / scale;
-      const tenths = (n % scale) * 10n / scale; // truncate toward zero
+      const tenths = ((n % scale) * 10n) / scale; // truncate toward zero
       return tenths === 0n ? `${whole}${suffix}` : `${whole}.${tenths}${suffix}`;
     }
   }

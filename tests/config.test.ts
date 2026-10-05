@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { configDir, configPath, loadConfig, resolveSettings, saveConfig, DEFAULT_API_URL } from '../src/config/index.js';
+import {
+  configDir,
+  configPath,
+  loadConfig,
+  resolveSettings,
+  saveConfig,
+  DEFAULT_API_URL,
+} from '../src/config/index.js';
 
 function tempEnv(): { dir: string; xdg: string } {
   const dir = mkdtempSync(join(tmpdir(), 'selora-cfg-'));

@@ -62,7 +62,12 @@ function usageLineValue(t: UsageTotals): string {
   );
 }
 
-function totalsJson(t: UsageTotals): { requests: string; input_tokens: string; output_tokens: string; spend: string } {
+function totalsJson(t: UsageTotals): {
+  requests: string;
+  input_tokens: string;
+  output_tokens: string;
+  spend: string;
+} {
   return {
     requests: t.requests.toString(),
     input_tokens: t.inputTokens.toString(),
@@ -75,7 +80,12 @@ export async function runUsage(ctx: CliContext, flags: UsageFlags): Promise<void
   const r = new Renderer({ out: ctx.io.out, err: ctx.io.err, json: ctx.json, debug: ctx.debug });
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   const picked = [
     { on: flags.today === true, label: 'Today', days: 1 },
@@ -132,7 +142,8 @@ export async function runUsage(ctx: CliContext, flags: UsageFlags): Promise<void
       r.line('No usage recorded in this period.');
     } else {
       ranges.forEach((range, i) => {
-        const value = responses[i]!.summary.length === 0 ? 'no usage recorded' : usageLineValue(sums[i]!);
+        const value =
+          responses[i]!.summary.length === 0 ? 'no usage recorded' : usageLineValue(sums[i]!);
         r.field(range.label, value);
       });
     }
@@ -147,7 +158,9 @@ export async function runUsage(ctx: CliContext, flags: UsageFlags): Promise<void
         const wReq = Math.max(9, ...byModel.map((m) => formatCount(BigInt(m.requests)).length)) + 2;
         r.gray(`${'MODEL'.padEnd(wModel)}${'REQUESTS'.padStart(wReq)} SPEND`);
         for (const m of byModel) {
-          r.line(`${m.model_id.padEnd(wModel)}${formatCount(BigInt(m.requests)).padStart(wReq)} ${formatUsd(m.spend)}`);
+          r.line(
+            `${m.model_id.padEnd(wModel)}${formatCount(BigInt(m.requests)).padStart(wReq)} ${formatUsd(m.spend)}`,
+          );
         }
       }
     }

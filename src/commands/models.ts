@@ -22,7 +22,12 @@ export async function runModels(ctx: CliContext): Promise<void> {
   const r = new Renderer({ out: ctx.io.out, err: ctx.io.err, json: ctx.json, debug: ctx.debug });
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   try {
     const models = await listModels(client);
@@ -36,7 +41,9 @@ export async function runModels(ctx: CliContext): Promise<void> {
       r.line('No models available.');
       return;
     }
-    const sorted: ModelSummary[] = [...models].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const sorted: ModelSummary[] = [...models].sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    );
     const rows = sorted.map((m) => ({
       id: m.supports_1m_context ? `${m.id} 1m` : m.id,
       provider: m.provider !== '' ? m.provider : '—',

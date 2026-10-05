@@ -119,13 +119,20 @@ describe('init', () => {
     const dir = tempProject();
     try {
       installRoutes([]);
-      writeFileSync(projectConfigPath(dir), JSON.stringify({ version: 1, model: 'old-model' }), 'utf8');
+      writeFileSync(
+        projectConfigPath(dir),
+        JSON.stringify({ version: 1, model: 'old-model' }),
+        'utf8',
+      );
       const { io, cap } = capturedIo();
       await runInit(ctx(io), { cwd: dir });
       expect(cap.err.join('\n')).toContain('✗ selora.json already exists (use --force)');
       expect(process.exitCode).toBe(1);
       // the original file is untouched
-      expect(JSON.parse(readFileSync(projectConfigPath(dir), 'utf8'))).toEqual({ version: 1, model: 'old-model' });
+      expect(JSON.parse(readFileSync(projectConfigPath(dir), 'utf8'))).toEqual({
+        version: 1,
+        model: 'old-model',
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -136,7 +143,11 @@ describe('init', () => {
     const dir = tempProject();
     try {
       installRoutes([]);
-      writeFileSync(projectConfigPath(dir), JSON.stringify({ version: 1, model: 'old-model' }), 'utf8');
+      writeFileSync(
+        projectConfigPath(dir),
+        JSON.stringify({ version: 1, model: 'old-model' }),
+        'utf8',
+      );
       const { io, cap } = capturedIo();
       await runInit(ctx(io), { cwd: dir, force: true });
       expect(JSON.parse(readFileSync(projectConfigPath(dir), 'utf8'))).toEqual(EXPECTED_INIT_JSON);
@@ -160,7 +171,9 @@ describe('init', () => {
       expect(process.exitCode).toBe(1);
       expect(existsSync(projectConfigPath(dir))).toBe(false);
       // exactly one request: the failed verification, no chat traffic
-      expect(server.requests.slice(before).every((r) => r.path === '/v1/models/no-such-model')).toBe(true);
+      expect(
+        server.requests.slice(before).every((r) => r.path === '/v1/models/no-such-model'),
+      ).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -301,7 +314,11 @@ describe('run', () => {
       installRoutes(CHAT_STREAM_FULL);
       writeFileSync(
         projectConfigPath(dir),
-        JSON.stringify({ version: 1, model: 'gpt-5.2-mini', context: { include: ['src/**/*'], exclude: [] } }),
+        JSON.stringify({
+          version: 1,
+          model: 'gpt-5.2-mini',
+          context: { include: ['src/**/*'], exclude: [] },
+        }),
         'utf8',
       );
       const before = server.requests.length;
@@ -314,14 +331,14 @@ describe('run', () => {
       ) as { model: string };
       expect(body1.model).toBe('gpt-5.2-mini');
       // the resolution source is reported only under --debug
-      expect(first.cap.err.join('\n')).toContain('model: gpt-5.2-mini (resolved from project selora.json)');
+      expect(first.cap.err.join('\n')).toContain(
+        'model: gpt-5.2-mini (resolved from project selora.json)',
+      );
 
       // the flag beats the project file
       const second = capturedIo();
       await runRun(ctx(second.io), 'hi', { cwd: dir, model: 'kimi-k2' });
-      const body2 = JSON.parse(
-        server.requests.slice(before).at(-1)!.body,
-      ) as { model: string };
+      const body2 = JSON.parse(server.requests.slice(before).at(-1)!.body) as { model: string };
       expect(body2.model).toBe('kimi-k2');
       // and the flag run stayed silent about resolution (no --debug)
       expect(second.cap.err.join('\n')).not.toContain('resolved from');
@@ -331,9 +348,7 @@ describe('run', () => {
       try {
         const third = capturedIo();
         await runRun(ctx(third.io, false, true), 'hi', { cwd: bare });
-        const body3 = JSON.parse(
-          server.requests.slice(before).at(-1)!.body,
-        ) as { model: string };
+        const body3 = JSON.parse(server.requests.slice(before).at(-1)!.body) as { model: string };
         expect(body3.model).toBe('claude-haiku-4.5');
         expect(third.cap.err.join('\n')).toContain('resolved from global default model');
       } finally {

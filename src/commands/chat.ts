@@ -84,16 +84,24 @@ export async function runChat(
 
   // Fail fast on a missing key: chat is the API-key-only route.
   if (getStoredKey() === undefined) {
-    r.renderError(new SeloraApiError({ kind: 'auth', message: 'You are not logged in. Run: selora login' }));
+    r.renderError(
+      new SeloraApiError({ kind: 'auth', message: 'You are not logged in. Run: selora login' }),
+    );
     return;
   }
 
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   const flagModel = flags.model !== undefined ? flags.model.trim() : '';
-  const wanted = flagModel !== '' ? flagModel : (loadConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK);
+  const wanted =
+    flagModel !== '' ? flagModel : (loadConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK);
 
   let current: SessionModel;
   try {
@@ -253,7 +261,10 @@ export async function runChat(
       if (err instanceof SeloraApiError && err.kind === 'cancelled') {
         history.pop(); // drop the aborted pair entirely
         r.bullet('Request cancelled — session kept');
-      } else if (err instanceof SeloraApiError && (err.kind === 'auth' || err.kind === 'auth_revoked')) {
+      } else if (
+        err instanceof SeloraApiError &&
+        (err.kind === 'auth' || err.kind === 'auth_revoked')
+      ) {
         // Fatal: the key is gone/revoked — exit 1 with the verbatim message.
         r.renderError(err);
         currentAbort = null;

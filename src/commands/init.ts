@@ -53,14 +53,20 @@ export async function runInit(ctx: CliContext, flags: InitFlags): Promise<void> 
 
   // --model > the global defaultModel > the CLI's built-in default.
   const flagModel = flags.model !== undefined ? flags.model.trim() : '';
-  const wanted = flagModel !== '' ? flagModel : (loadConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK);
+  const wanted =
+    flagModel !== '' ? flagModel : (loadConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK);
 
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
   // auth:'none' on the models route — the stored key (if any) is irrelevant
   // and no Authorization header is sent (the internal flavor is the only one
   // with pricing).
-  const client = new SeloraClient({ baseUrl, apiKey: getStoredKey(), debug: ctx.debug, logger: ctx.io.err });
+  const client = new SeloraClient({
+    baseUrl,
+    apiKey: getStoredKey(),
+    debug: ctx.debug,
+    logger: ctx.io.err,
+  });
 
   let modelId: string;
   try {
@@ -93,5 +99,7 @@ export async function runInit(ctx: CliContext, flags: InitFlags): Promise<void> 
   }
 
   r.ok(`Wrote selora.json (model: ${modelId})`);
-  r.bullet('v0.1 stores this config only — context globs are saved for the future agent and are NOT read yet (see docs/agent.md)');
+  r.bullet(
+    'v0.1 stores this config only — context globs are saved for the future agent and are NOT read yet (see docs/agent.md)',
+  );
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { classifyHttpError, decodeErrorEnvelope, networkError, timeoutError, SeloraApiError } from '../src/api/errors.js';
+import {
+  classifyHttpError,
+  decodeErrorEnvelope,
+  networkError,
+  timeoutError,
+  SeloraApiError,
+} from '../src/api/errors.js';
 
 const RID = 'req_test_1';
 
@@ -9,7 +15,10 @@ function envelope(code: string, message: string, extra: Record<string, unknown> 
 
 describe('error classification', () => {
   it('401 unauthorized → auth kind with login guidance', () => {
-    const err = classifyHttpError({ status: 401, bodyText: envelope('unauthorized', 'Invalid email or password') });
+    const err = classifyHttpError({
+      status: 401,
+      bodyText: envelope('unauthorized', 'Invalid email or password'),
+    });
     expect(err.kind).toBe('auth');
     expect(err.message).toBe('You are not logged in. Run: selora login');
     expect(err.reqId).toBe(RID);
@@ -29,7 +38,10 @@ describe('error classification', () => {
   it('402 no plan → no_plan + trial hint', () => {
     const err = classifyHttpError({
       status: 402,
-      bodyText: envelope('insufficient_balance', 'No API credits remaining. Purchase a plan to continue.'),
+      bodyText: envelope(
+        'insufficient_balance',
+        'No API credits remaining. Purchase a plan to continue.',
+      ),
     });
     expect(err.kind).toBe('no_plan');
     expect(err.message).toBe('No API credits remaining. Purchase a plan to continue.');
@@ -56,7 +68,10 @@ describe('error classification', () => {
   it('429 → rate_limited, verbatim + retry hint from retry_after_seconds', () => {
     const err = classifyHttpError({
       status: 429,
-      bodyText: envelope('rate_limited', 'Rate limit exceeded. Retry in 30s.', { retryable: true, retry_after_seconds: 30 }),
+      bodyText: envelope('rate_limited', 'Rate limit exceeded. Retry in 30s.', {
+        retryable: true,
+        retry_after_seconds: 30,
+      }),
     });
     expect(err.kind).toBe('rate_limited');
     expect(err.message).toBe('Rate limit exceeded. Retry in 30s.');
@@ -80,7 +95,10 @@ describe('error classification', () => {
   });
 
   it('other 4xx → http_error with backend message verbatim', () => {
-    const err = classifyHttpError({ status: 400, bodyText: envelope('bad_request', 'days must be 1-365') });
+    const err = classifyHttpError({
+      status: 400,
+      bodyText: envelope('bad_request', 'days must be 1-365'),
+    });
     expect(err.kind).toBe('http_error');
     expect(err.message).toBe('days must be 1-365');
   });
@@ -98,13 +116,18 @@ describe('error classification', () => {
   });
 
   it('402 with unknown message text → http_error fallback (never a fabricated kind)', () => {
-    const err = classifyHttpError({ status: 402, bodyText: envelope('insufficient_balance', 'Something else') });
+    const err = classifyHttpError({
+      status: 402,
+      bodyText: envelope('insufficient_balance', 'Something else'),
+    });
     expect(err.kind).toBe('http_error');
     expect(err.message).toBe('Something else');
   });
 
   it('network/timeout errors carry honest messages + debug hint', () => {
-    expect(networkError().message).toBe('Unable to connect to Selora — check your connection or try again.');
+    expect(networkError().message).toBe(
+      'Unable to connect to Selora — check your connection or try again.',
+    );
     expect(networkError().hint).toBe('(run with --debug for details)');
     expect(timeoutError(1000).kind).toBe('timeout');
     expect(timeoutError(1000).message).toContain('timed out');
@@ -120,7 +143,12 @@ describe('error classification', () => {
   });
 
   it('decodeErrorEnvelope guards non-object and missing error field', () => {
-    expect(decodeErrorEnvelope('[]')).toEqual({ code: undefined, message: undefined, retryAfterSeconds: undefined, reqId: undefined });
+    expect(decodeErrorEnvelope('[]')).toEqual({
+      code: undefined,
+      message: undefined,
+      retryAfterSeconds: undefined,
+      reqId: undefined,
+    });
     expect(decodeErrorEnvelope('{"no_error": 1}').code).toBeUndefined();
     expect(decodeErrorEnvelope('not json').message).toBeUndefined();
     expect(decodeErrorEnvelope('{"error": "string not object"}').code).toBeUndefined();
@@ -129,7 +157,19 @@ describe('error classification', () => {
   it('SeloraApiError.toJson omits undefined fields', () => {
     const err = new SeloraApiError({ kind: 'auth', message: 'x' });
     expect(err.toJson()).toEqual({ kind: 'auth', message: 'x' });
-    const rich = new SeloraApiError({ kind: 'http_error', message: 'x', status: 409, reqId: 'r1', hint: 'h' });
-    expect(rich.toJson()).toEqual({ kind: 'http_error', message: 'x', hint: 'h', reqId: 'r1', status: 409 });
+    const rich = new SeloraApiError({
+      kind: 'http_error',
+      message: 'x',
+      status: 409,
+      reqId: 'r1',
+      hint: 'h',
+    });
+    expect(rich.toJson()).toEqual({
+      kind: 'http_error',
+      message: 'x',
+      hint: 'h',
+      reqId: 'r1',
+      status: 409,
+    });
   });
 });

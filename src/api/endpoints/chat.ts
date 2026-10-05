@@ -59,7 +59,9 @@ export interface StreamChatOptions {
 }
 
 function rec(v: unknown): Record<string, unknown> | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
 }
 
 function finiteNum(recSrc: Record<string, unknown>, key: string): number | undefined {

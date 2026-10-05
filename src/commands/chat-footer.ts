@@ -27,7 +27,10 @@ export function formatChatCost(charge: string): string {
  * The footer line (leading two spaces) for a completed reply, or undefined
  * when the stream never sent a usage chunk — the caller must print nothing.
  */
-export function chatFooterLine(usage: ChatUsage | undefined, charge: string | undefined): string | undefined {
+export function chatFooterLine(
+  usage: ChatUsage | undefined,
+  charge: string | undefined,
+): string | undefined {
   if (usage === undefined) return undefined;
   const parts = [`Tokens: ${formatCount(BigInt(usage.totalTokens))}`];
   if (charge !== undefined && charge !== '') {

@@ -124,7 +124,11 @@ export class Renderer {
       const error =
         err instanceof SeloraApiError
           ? err.toJson()
-          : { kind: 'internal', message: 'Unexpected CLI error.', hint: '(run with --debug for details)' };
+          : {
+              kind: 'internal',
+              message: 'Unexpected CLI error.',
+              hint: '(run with --debug for details)',
+            };
       this.out(JSON.stringify({ ok: false, error }, null, 2));
       if (this.debug) this.debugDetail(err);
       return;

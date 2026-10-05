@@ -46,7 +46,9 @@ function bool(rec: Record<string, unknown>, key: string): boolean {
 }
 
 function rec(v: unknown): Record<string, unknown> | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
 }
 
 function decodePricing(v: unknown): ModelPricing {
@@ -76,7 +78,9 @@ export async function listModels(client: SeloraClient): Promise<ModelSummary[]> 
 }
 
 export async function getModel(client: SeloraClient, id: string): Promise<ModelDetail> {
-  const res = await client.request<unknown>(`/v1/models/${encodeURIComponent(id)}`, { auth: 'none' });
+  const res = await client.request<unknown>(`/v1/models/${encodeURIComponent(id)}`, {
+    auth: 'none',
+  });
   const root = rec(res);
   const m = root !== null ? rec(root['model']) : null;
   if (m === null) {
