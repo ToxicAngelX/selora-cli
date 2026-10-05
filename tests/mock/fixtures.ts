@@ -415,3 +415,125 @@ export const KEYS_EMPTY_BODY = JSON.stringify({ keys: [] });
 
 export const DELETE_KEY_SOFT = DELETE_KEY_OK;
 export const DELETE_KEY_HARD = JSON.stringify({ ok: true, id: 'key_2', deleted: true, deletion: 'hard' });
+
+// ---------------------------------------------------------------------------
+// Phase 3: chat streaming fixtures — shaped EXACTLY per the wire reference:
+// role-only first chunk, delta chunks, finish chunk, usage chunk (choices: []
+// + usage + gateway.charge decimal string), raw [DONE] sentinel, and
+// `: keep-alive` comments.
+// ---------------------------------------------------------------------------
+
+function sseData(obj: unknown): string {
+  return `data: ${JSON.stringify(obj)}\n\n`;
+}
+
+const CHAT_ROLE_CHUNK = {
+  id: 'chatcmpl_test',
+  object: 'chat.completion.chunk',
+  model: 'glm-5.3-flash',
+  choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+};
+
+/**
+ * Full realistic stream: role chunk → keep-alive comment → one
+ * reasoning_content delta → 2 content deltas → finish chunk → usage chunk
+ * {prompt 4821, completion 1234, total 6055} + gateway {charge "0.018234",
+ * request_id} → [DONE]. Reply text: "Hello, world!".
+ */
+export const CHAT_STREAM_FULL: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  ': keep-alive\n\n',
+  sseData({ choices: [{ index: 0, delta: { reasoning_content: '(thinking about it)' }, finish_reason: null }] }),
+  sseData({ choices: [{ index: 0, delta: { content: 'Hello, ' }, finish_reason: null }] }),
+  sseData({ choices: [{ index: 0, delta: { content: 'world!' }, finish_reason: null }] }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 4821, completion_tokens: 1234, total_tokens: 6055 },
+    gateway: { charge: '0.018234', request_id: 'req_chat_full' },
+  }),
+  'data: [DONE]\n\n',
+];
+
+/**
+ * Same event sequence, but one content event is split mid-JSON across two
+ * frames — the client parser must buffer across writes.
+ */
+export const CHAT_STREAM_SPLIT: string[] = (() => {
+  const f = CHAT_STREAM_FULL;
+  const target = f[3]!;
+  const cut = Math.floor(target.length / 2);
+  return [f[0]!, f[1]!, f[2]!, target.slice(0, cut), target.slice(cut), f[4]!, f[5]!, f[6]!, f[7]!];
+})();
+
+/** include_usage:false wire shape: a single finish chunk carrying only gateway. No footer. */
+export const CHAT_STREAM_NO_USAGE: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({ choices: [{ index: 0, delta: { content: 'No footer for this one.' }, finish_reason: null }] }),
+  sseData({
+    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    gateway: { charge: '0.001000', request_id: 'req_chat_no_usage' },
+  }),
+  'data: [DONE]\n\n',
+];
+
+/** In-band error (headers already sent): a 402 window-exhausted message as a data event. */
+export const CHAT_STREAM_INBAND_ERROR: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({ choices: [{ index: 0, delta: { content: 'partial ' }, finish_reason: null }] }),
+  sseData({
+    error: {
+      code: 'insufficient_balance',
+      message:
+        'Your 4h plan usage limit is reached and your API credit balance is empty. Top up API credits to continue pay-as-you-go, or wait for the window to reset. Plan usage resumes at 2026-10-05T14:00:00Z.',
+      request_id: 'req_chat_inband',
+    },
+  }),
+];
+
+/** Second-turn reply with different numbers (footer: Tokens: 150 · Cost: $0.001). */
+export const CHAT_STREAM_SECOND: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({ choices: [{ index: 0, delta: { content: 'Second reply, ' }, finish_reason: null }] }),
+  sseData({ choices: [{ index: 0, delta: { content: 'after the switch.' }, finish_reason: null }] }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 },
+    gateway: { charge: '0.001000', request_id: 'req_chat_second' },
+  }),
+  'data: [DONE]\n\n',
+];
+
+/** Stream that emits one delta then hangs open (abort tests — pair with sseHang: true). */
+export const CHAT_STREAM_HANG: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({ choices: [{ index: 0, delta: { content: 'Star' }, finish_reason: null }] }),
+];
+
+/** Pre-stream 402: window exhausted, reset time ONLY inside the message text. */
+export const WINDOW_EXHAUSTED_402 = JSON.stringify({
+  error: {
+    code: 'insufficient_balance',
+    message:
+      'Your 4h plan usage limit is reached and your API credit balance is empty. Top up API credits to continue pay-as-you-go, or wait for the window to reset. Plan usage resumes at 2026-10-05T14:00:00Z.',
+    request_id: 'req_chat_402',
+  },
+});
+
+/** Non-streaming 2xx fallback: a plain JSON completion with no event-stream content-type. */
+export const CHAT_COMPLETION_NONSTREAM = JSON.stringify({
+  id: 'chatcmpl_nonstream',
+  object: 'chat.completion',
+  created: 1760000000,
+  model: 'glm-5.3-flash',
+  choices: [
+    {
+      index: 0,
+      message: { role: 'assistant', content: 'Plain completion reply.' },
+      finish_reason: 'stop',
+    },
+  ],
+  usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105 },
+  gateway: { charge: '0.000500', request_id: 'req_chat_nonstream' },
+});

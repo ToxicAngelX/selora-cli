@@ -11,6 +11,7 @@ import { runUsage } from './commands/usage.js';
 import { runModels } from './commands/models.js';
 import { runModel } from './commands/model.js';
 import { runKeys } from './commands/keys.js';
+import { runChat } from './commands/chat.js';
 import { Renderer } from './terminal/render.js';
 
 /**
@@ -164,6 +165,19 @@ export async function main(argv: string[], io: CliIo = defaultIo()): Promise<voi
         typeof arg === 'string' ? arg : undefined,
         { name: typeof opts['name'] === 'string' ? opts['name'] : undefined, yes: opts['yes'] === true },
       );
+    });
+
+  const chatCmd = program
+    .command('chat')
+    .description('chat with a model in an interactive streaming session')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--model <id>', 'model for this session (default: the configured default model)')
+    .action(async (opts: Record<string, unknown>) => {
+      await runChat(ctxFor(chatCmd), {
+        model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
+      });
     });
 
   if (argv.length === 0) {

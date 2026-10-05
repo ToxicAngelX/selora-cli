@@ -51,15 +51,23 @@ export function useApiUrl(url: string): void {
 export interface Captured {
   out: string[];
   err: string[];
+  /** Everything written via raw writeOut, concatenated with no added newlines. */
+  outText(): string;
+  /** Everything written via raw writeErr, concatenated with no added newlines. */
+  errText(): string;
   all(): string;
 }
 
 export function capturedIo(): { io: CliIo; cap: Captured } {
   const out: string[] = [];
   const err: string[] = [];
+  let outRaw = '';
+  let errRaw = '';
   const cap: Captured = {
     out,
     err,
+    outText: () => outRaw,
+    errText: () => errRaw,
     all: () => [...out, ...err].join('\n'),
   };
   const io: CliIo = {
@@ -70,6 +78,12 @@ export function capturedIo(): { io: CliIo; cap: Captured } {
     },
     err: (s) => {
       err.push(s);
+    },
+    writeOut: (s) => {
+      outRaw += s;
+    },
+    writeErr: (s) => {
+      errRaw += s;
     },
   };
   return { io, cap };

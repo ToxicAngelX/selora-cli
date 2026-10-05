@@ -17,6 +17,10 @@ export interface RenderOptions {
   out?: Writer;
   /** Write errors/prompts (default: process.stderr via console.error). */
   err?: Writer;
+  /** Raw stdout write with NO trailing newline (streamed chat deltas). */
+  rawOut?: Writer;
+  /** Raw stderr write with NO trailing newline (chat prompt, streamed reasoning). */
+  rawErr?: Writer;
   /** --json mode: only JSON on stdout, errors as {ok:false,...}. */
   json?: boolean;
   /** --debug: extra raw detail on errors. */
@@ -37,6 +41,8 @@ function colorsEnabled(streamIsTTY: boolean): boolean {
 export class Renderer {
   private readonly out: Writer;
   private readonly err: Writer;
+  private readonly rawOut: Writer;
+  private readonly rawErr: Writer;
   readonly json: boolean;
   readonly debug: boolean;
   private readonly outColor: boolean;
@@ -45,6 +51,8 @@ export class Renderer {
   constructor(opts: RenderOptions = {}) {
     this.out = opts.out ?? ((s) => process.stdout.write(`${s}\n`));
     this.err = opts.err ?? ((s) => process.stderr.write(`${s}\n`));
+    this.rawOut = opts.rawOut ?? ((s) => process.stdout.write(s));
+    this.rawErr = opts.rawErr ?? ((s) => process.stderr.write(s));
     this.json = opts.json === true;
     this.debug = opts.debug === true;
     this.outColor = colorsEnabled(process.stdout.isTTY === true);
@@ -93,6 +101,16 @@ export class Renderer {
    */
   green(text: string): void {
     this.out(`${this.outColor ? GREEN : ''}${text}${this.outColor ? RESET : ''}`);
+  }
+
+  /** Raw stdout write — NO trailing newline. Streamed chat content deltas. */
+  writeRaw(text: string): void {
+    this.rawOut(text);
+  }
+
+  /** Raw gray stderr write — NO trailing newline. REPL prompt, streamed reasoning. */
+  writeRawGray(text: string): void {
+    this.rawErr(`${this.errColor ? GRAY : ''}${text}${this.errColor ? RESET : ''}`);
   }
 
   /**

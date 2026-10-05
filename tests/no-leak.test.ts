@@ -16,6 +16,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startMockServer, type MockServer } from './mock/server.js';
 import {
+  CHAT_STREAM_FULL,
   EMAIL,
   FAKE_JWT,
   FAKE_KEY_CREATED,
@@ -25,13 +26,16 @@ import {
   createKeyBody,
   keysBody,
   last4,
+  modelDetailBody,
   DELETE_KEY_OK,
 } from './mock/fixtures.js';
 import { capturedIo, cleanup, freshEnv, pipedStdin, useApiUrl, type TempEnv } from './helpers/env.js';
+import { saveConfig } from '../src/config/index.js';
 import { runLogin } from '../src/commands/login.js';
 import { runLogout } from '../src/commands/logout.js';
 import { runWhoami } from '../src/commands/whoami.js';
 import { runKeys } from '../src/commands/keys.js';
+import { runChat } from '../src/commands/chat.js';
 import type { CliContext } from '../src/context.js';
 
 const PASSWORD = 'correct-horse-battery-staple';
@@ -176,5 +180,34 @@ describe('no-leak (hard rule: credentials never appear in output, even in debug 
     expect(stdout.split(FAKE_KEY_CREATED).length - 1).toBe(1);
     expect(stderr.includes(FAKE_KEY_CREATED)).toBe(false);
     assertNoLeak(text, 'keys create');
+  });
+
+  it('chat REPL in debug mode: request line + status logged, Authorization header never printed, no leaks', async () => {
+    server.setHandler((req) => {
+      if (req.method === 'GET' && req.path.startsWith('/v1/models/')) {
+        return { status: 200, body: modelDetailBody(req.path.slice('/v1/models/'.length)) };
+      }
+      if (req.method === 'POST' && req.path === '/v1/chat/completions') {
+        return { status: 200, sse: CHAT_STREAM_FULL };
+      }
+      return { status: 404, body: '{"error":{"code":"not_found","message":"no fixture"}}' };
+    });
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    const { io, cap } = capturedIo();
+    const c: CliContext = {
+      debug: true,
+      json: false,
+      apiUrl: server.url,
+      io: { ...io, stdin: pipedStdin(['hi', '/exit']), isTTY: true },
+    };
+    await runChat(c, {});
+    // combined view: line writes AND raw streaming writes
+    const text = `${cap.all()}\n${cap.outText()}\n${cap.errText()}`;
+    // debug actually ran for the streaming request, and the stream rendered
+    expect(text).toContain('→ POST /v1/chat/completions');
+    expect(text).toContain('← 200');
+    expect(text).toContain('Hello, world!');
+    expect(text).toContain('Session ended');
+    assertNoLeak(text, 'chat');
   });
 });

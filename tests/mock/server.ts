@@ -23,6 +23,12 @@ export interface MockResponse {
   body?: string | undefined;
   /** Never respond (for timeout tests). */
   hang?: boolean;
+  /** SSE mode: raw frames written in order (each carries its own \n\n). Frames may split a single event across two entries — the client parser must buffer. */
+  sse?: string[] | undefined;
+  /** Delay in ms between SSE frames (default 0 — separate write() calls, no delay). */
+  sseDelayMs?: number | undefined;
+  /** After writing all frames, leave the stream open (mid-stream hang — abort tests). */
+  sseHang?: boolean | undefined;
 }
 
 export type MockHandler = (req: CapturedRequest, res: ServerResponse) => MockResponse | Promise<MockResponse>;
@@ -42,6 +48,12 @@ function flattenHeaders(msg: IncomingMessage): Record<string, string> {
     else if (Array.isArray(v)) out[k] = v.join(', ');
   }
   return out;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export async function startMockServer(): Promise<MockServer> {
@@ -65,13 +77,25 @@ export async function startMockServer(): Promise<MockServer> {
       n += 1;
       const requestId = `mock-req-${n}`;
       Promise.resolve(handler(captured, res))
-        .then((mock: MockResponse) => {
+        .then(async (mock: MockResponse) => {
           if (mock.hang === true) return; // leave the socket open, never respond
-          res.writeHead(mock.status, {
-            'content-type': 'application/json',
-            'x-request-id': requestId,
-            ...(mock.headers ?? {}),
-          });
+          const baseHeaders =
+            mock.sse !== undefined
+              ? { 'content-type': 'text/event-stream', 'x-request-id': requestId }
+              : { 'content-type': 'application/json', 'x-request-id': requestId };
+          res.writeHead(mock.status, { ...baseHeaders, ...(mock.headers ?? {}) });
+          if (mock.sse !== undefined) {
+            // Separate write() calls (optionally delayed) force the client to
+            // buffer and parse incrementally.
+            const delay = mock.sseDelayMs ?? 0;
+            for (const frame of mock.sse) {
+              if (delay > 0) await sleep(delay);
+              res.write(frame);
+            }
+            if (mock.sseHang === true) return; // stream stays open mid-way
+            res.end();
+            return;
+          }
           res.end(mock.body ?? '');
         })
         .catch((err: unknown) => {
@@ -95,6 +119,8 @@ export async function startMockServer(): Promise<MockServer> {
     },
     close: () =>
       new Promise<void>((resolve, reject) => {
+        // Destroy sockets left open by hang/sseHang responses so close() cannot block.
+        server.closeAllConnections();
         server.close((err) => {
           if (err) reject(err);
           else resolve();
