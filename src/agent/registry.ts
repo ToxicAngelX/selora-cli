@@ -1,23 +1,19 @@
 /**
- * Tool registry for the future agent loop — EMPTY in v0.1 by design.
+ * Tool registry — the library API for tool authors. v0.2's agent loop ships
+ * its built-in tools via `builtinTools()` (agent/tools/index.ts) and passes
+ * them to the loop explicitly, so fresh instances never share state across
+ * runs or tests. This registry remains the extension point: register your
+ * own Tool objects and hand `listTools()` to a custom loop.
  *
- * The plan (docs/agent.md): when the agent loop lands, `selora run` will ask
- * this registry for the available tools, bridge them into the chat wire
- * format, render a permission prompt (Tool.permissionLabel), execute with
- * dryRun: true first, and only then run for real. The interface and registry
- * land NOW precisely so that loop can be added without touching the command
- * layer or the API client.
- *
- * Until a real tool exists, listTools() returns [] — pinned by test. There is
- * deliberately NO `selora agent` command: the CLI does not register commands
- * for features that do not exist.
+ * Nothing is auto-registered: importing this module registers nothing, and
+ * the CLI never mutates it. The duplicate-name guard keeps a registry honest.
  */
 
 import type { Tool } from './tool.js';
 
 const tools: Tool[] = [];
 
-/** Register a tool for the future agent loop. No caller in v0.1. */
+/** Register a tool. Throws on a duplicate name (never silently replaces). */
 export function registerTool(tool: Tool): void {
   if (tools.some((t) => t.name === tool.name)) {
     throw new Error(`Tool already registered: ${tool.name}`);
@@ -25,7 +21,12 @@ export function registerTool(tool: Tool): void {
   tools.push(tool);
 }
 
-/** The registered tools — [] in v0.1 (nothing is registered). */
+/** The registered tools (a copy — mutating it changes nothing). */
 export function listTools(): Tool[] {
   return [...tools];
+}
+
+/** Remove all registered tools (test isolation). */
+export function clearTools(): void {
+  tools.length = 0;
 }

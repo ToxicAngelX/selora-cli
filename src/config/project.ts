@@ -1,9 +1,8 @@
 /**
  * Project-local selora.json — DISTINCT from the global XDG config.json. The
- * file stores the project's model choice plus context globs for the future
- * agent (docs/agent.md). v0.1 only WRITES it (`selora init`) and reads the
- * `model` field (`selora run`); the context globs are saved for the future
- * agent and are NOT read yet.
+ * file stores the project's model choice, context globs, and (v0.2) agent
+ * settings. `selora init` writes model + context; the optional "agent"
+ * section is hand-edited — init does not write it.
  *
  * Reading is defensive (the /root defect class): malformed JSON or wrong
  * shapes degrade to a warning on stderr + an ignored file — never a crash.
@@ -18,7 +17,7 @@ export const PROJECT_CONFIG_FILENAME = 'selora.json';
 /** File-format version — bump only on a breaking shape change. */
 export const PROJECT_CONFIG_VERSION = 1;
 
-/** Context globs `selora init` writes for the future agent. */
+/** Context globs `selora init` writes for the agent. */
 export const DEFAULT_CONTEXT_INCLUDE: readonly string[] = ['src/**/*', 'docs/**/*.md'];
 export const DEFAULT_CONTEXT_EXCLUDE: readonly string[] = ['**/node_modules/**', '**/dist/**'];
 
@@ -27,11 +26,21 @@ export interface ProjectContextGlobs {
   exclude: string[];
 }
 
+/** Agent settings from the optional selora.json "agent" object. */
+export interface ProjectAgentConfig {
+  /** Agent loop turn cap (1-200). Absent: the loop's default (25). */
+  maxTurns?: number;
+  /** Opt-in for run_command on Windows (default: refused). */
+  allowWindowsCmd?: boolean;
+}
+
 export interface ProjectConfig {
   /** The project's model choice (non-empty string on disk). */
   model?: string;
   /** Present only when both include/exclude are well-formed string arrays. */
   context?: ProjectContextGlobs;
+  /** Present only when at least one agent field is well-formed. */
+  agent?: ProjectAgentConfig;
 }
 
 export function projectConfigPath(cwd: string): string {
@@ -89,6 +98,26 @@ export function loadProjectConfig(cwd: string): ProjectConfig {
     if (include !== undefined && exclude !== undefined) {
       cfg.context = { include, exclude };
     }
+  }
+  const a = rec(Object.hasOwn(root, 'agent') ? root['agent'] : undefined);
+  if (a !== null) {
+    const agent: ProjectAgentConfig = {};
+    if (Object.hasOwn(a, 'maxTurns')) {
+      const v = a['maxTurns'];
+      if (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 200) {
+        agent.maxTurns = v;
+      } else {
+        console.error('· Ignoring agent.maxTurns — must be an integer between 1 and 200.');
+      }
+    }
+    if (Object.hasOwn(a, 'allowWindowsCmd')) {
+      if (typeof a['allowWindowsCmd'] === 'boolean') {
+        agent.allowWindowsCmd = a['allowWindowsCmd'];
+      } else {
+        console.error('· Ignoring agent.allowWindowsCmd — must be a boolean.');
+      }
+    }
+    if (Object.keys(agent).length > 0) cfg.agent = agent;
   }
   return cfg;
 }
