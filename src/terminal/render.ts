@@ -76,10 +76,23 @@ export class Renderer {
     this.out(`${this.outColor ? GRAY : ''}${'─'.repeat(40)}${this.outColor ? RESET : ''}`);
   }
 
-  /** Label/value row: gray label padded to width. */
-  field(label: string, value: string): void {
-    const pad = label.length >= 12 ? '' : ' '.repeat(12 - label.length);
+  /** Label/value row: gray label padded to `width` (default 12). */
+  field(label: string, value: string, width = 12): void {
+    const pad = label.length >= width ? '' : ' '.repeat(width - label.length);
     this.out(`${this.outColor ? GRAY : ''}${label}${pad}${this.outColor ? RESET : ''}${value}`);
+  }
+
+  /** Plain gray stdout line (table headers, secondary labels). */
+  gray(text: string): void {
+    this.out(`${this.outColor ? GRAY : ''}${text}${this.outColor ? RESET : ''}`);
+  }
+
+  /**
+   * Plain green stdout line. Used ONLY for the one-time key-secret print in
+   * `keys create` — the single deliberate exception to never-print-keys.
+   */
+  green(text: string): void {
+    this.out(`${this.outColor ? GREEN : ''}${text}${this.outColor ? RESET : ''}`);
   }
 
   /**

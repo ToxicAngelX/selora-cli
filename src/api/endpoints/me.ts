@@ -130,6 +130,8 @@ export interface KeysResponse {
 export interface CreateKeyResponse {
   api_key: ApiKey;
   secret: string;
+  /** Backend one-time-secret warning, passed through when present. */
+  note: string;
 }
 
 export interface DeleteKeyResponse {
@@ -402,6 +404,7 @@ export async function createKey(
   const root = rec(res);
   const apiKey = rec(root === null ? undefined : root['api_key']);
   const secret = root === null ? undefined : root['secret'];
+  const note = root === null ? undefined : root['note'];
   return {
     api_key:
       apiKey === null
@@ -437,6 +440,7 @@ export async function createKey(
             request_count: num(apiKey, 'request_count'),
           },
     secret: typeof secret === 'string' ? secret : '',
+    note: typeof note === 'string' ? note : 'Store this secret now — it cannot be retrieved again.',
   };
 }
 

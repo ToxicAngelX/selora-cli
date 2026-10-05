@@ -31,6 +31,7 @@ import { capturedIo, cleanup, freshEnv, pipedStdin, useApiUrl, type TempEnv } fr
 import { runLogin } from '../src/commands/login.js';
 import { runLogout } from '../src/commands/logout.js';
 import { runWhoami } from '../src/commands/whoami.js';
+import { runKeys } from '../src/commands/keys.js';
 import type { CliContext } from '../src/context.js';
 
 const PASSWORD = 'correct-horse-battery-staple';
@@ -143,5 +144,37 @@ describe('no-leak (hard rule: credentials never appear in output, even in debug 
     expect(process.exitCode).toBe(1);
     expect(text).toContain('not accepted');
     assertNoLeak(text, 'invalid key');
+  });
+
+  it('keys list in debug mode: only the backend-masked hint appears, no leaks', async () => {
+    installRoutes();
+    const { c: cL, cap: capL } = debugCtx([]);
+    await runLogin(cL, { key: FAKE_KEY_USER });
+    assertNoLeak(capL.all(), 'setup login');
+
+    const { c, cap } = debugCtx([]);
+    await runKeys(c, 'list', undefined, {});
+    const text = cap.all();
+    expect(text).toContain('…' + last4(FAKE_KEY_USER));
+    assertNoLeak(text, 'keys list');
+  });
+
+  it('keys create in debug mode: the one-time secret appears EXACTLY ONCE in the combined output and ZERO times on stderr (the debug channel)', async () => {
+    installRoutes();
+    const { c: cL, cap: capL } = debugCtx([]);
+    await runLogin(cL, { key: FAKE_KEY_USER });
+    assertNoLeak(capL.all(), 'setup login');
+
+    const { c, cap } = debugCtx([]);
+    await runKeys(c, 'create', undefined, {});
+    const text = cap.all();
+    const stdout = cap.out.join('\n');
+    const stderr = cap.err.join('\n');
+    // the deliberate one-time print: exactly once overall, once on stdout,
+    // and never on the stderr/debug channel.
+    expect(text.split(FAKE_KEY_CREATED).length - 1).toBe(1);
+    expect(stdout.split(FAKE_KEY_CREATED).length - 1).toBe(1);
+    expect(stderr.includes(FAKE_KEY_CREATED)).toBe(false);
+    assertNoLeak(text, 'keys create');
   });
 });

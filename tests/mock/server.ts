@@ -9,7 +9,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 export interface CapturedRequest {
   method: string;
+  /** Path WITHOUT the query string. */
   path: string;
+  /** Full request URL including the query string (e.g. /v1/me/usage?days=7). */
+  url: string;
   headers: Record<string, string>;
   body: string;
 }
@@ -50,9 +53,11 @@ export async function startMockServer(): Promise<MockServer> {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
+      const url = req.url ?? '/';
       const captured: CapturedRequest = {
         method: req.method ?? 'GET',
-        path: (req.url ?? '/').split('?')[0]!,
+        path: url.split('?')[0]!,
+        url,
         headers: flattenHeaders(req),
         body: Buffer.concat(chunks).toString('utf8'),
       };

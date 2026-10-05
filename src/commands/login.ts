@@ -10,7 +10,6 @@
  * with GET /v1/me BEFORE storing.
  */
 
-import { hostname } from 'node:os';
 import type { CliContext } from '../context.js';
 import { resolveSettings } from '../config/index.js';
 import { SeloraClient } from '../api/client.js';
@@ -18,6 +17,7 @@ import { SeloraApiError } from '../api/errors.js';
 import { login } from '../api/endpoints/auth.js';
 import { createKey, getMe } from '../api/endpoints/me.js';
 import { createPrompter, PromptClosedError } from '../auth/prompts.js';
+import { suggestedKeyName } from '../auth/keyname.js';
 import { keyStorePath, storeKey, storedKeySource } from '../auth/storage.js';
 import { Renderer } from '../terminal/render.js';
 import { redact } from '../api/redact.js';
@@ -25,13 +25,6 @@ import { redact } from '../api/redact.js';
 export interface LoginFlags {
   /** `--key` with optional value: string when given, true when bare. */
   key?: string | boolean | undefined;
-}
-
-const KEYNAME_PREFIX = 'selora-cli-';
-
-function keyName(): string {
-  const host = hostname().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 100);
-  return `${KEYNAME_PREFIX}${host}`;
 }
 
 function clientFor(ctx: CliContext, baseUrl: string, apiKey?: string): SeloraClient {
@@ -183,7 +176,7 @@ async function loginWithPassword(
   }
 
   // Create a dedicated CLI key, authorized by the in-memory session token.
-  const name = keyName();
+  const name = suggestedKeyName();
   const tokenClient = clientFor(ctx, baseUrl);
   let created;
   try {

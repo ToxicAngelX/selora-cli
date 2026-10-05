@@ -188,3 +188,230 @@ export const INTERNAL_500 = JSON.stringify({
 });
 
 export const last4 = (key: string): string => key.slice(-4);
+
+// ---------------------------------------------------------------------------
+// Phase 2: balance / windows / usage / models fixtures — all shaped EXACTLY
+// per the wire reference (scale-6 decimal money strings, STRING numerics in
+// usage summaries, ISO dates, resetsInMs in ms).
+// ---------------------------------------------------------------------------
+
+export const BALANCE_BODY = JSON.stringify({
+  wallet: {
+    balance: '42.180000',
+    credit_balance: '4.970000',
+    holds: '0.000000',
+    available: '42.180000',
+    credits_expires_at: null,
+  },
+});
+
+/** session: $8.20 left of $10.00, resets in exactly 1h 12m (4_320_000 ms). */
+export const WINDOWS_BODY = JSON.stringify({
+  session: {
+    usedUsd: '1.800000',
+    limitUsd: '10.000000',
+    remainingUsd: '8.200000',
+    startedAt: '2026-10-05T10:00:00Z',
+    resetsAt: '2026-10-05T14:00:00Z',
+    resetsInMs: 4_320_000,
+    requests: 12,
+    enforced: true,
+    exhausted: false,
+    unlimited: false,
+  },
+  week: {
+    usedUsd: '13.000000',
+    limitUsd: '60.000000',
+    remainingUsd: '47.000000',
+    startedAt: '2026-09-29T00:00:00Z',
+    resetsAt: '2026-10-06T00:00:00Z',
+    resetsInMs: 86_400_000,
+    requests: 1204,
+    enforced: true,
+    exhausted: false,
+    unlimited: false,
+  },
+});
+
+export const WINDOWS_BODY_EXHAUSTED = JSON.stringify({
+  session: {
+    usedUsd: '10.000000',
+    limitUsd: '10.000000',
+    remainingUsd: '0.000000',
+    startedAt: '2026-10-05T10:00:00Z',
+    resetsAt: '2026-10-05T14:00:00Z',
+    resetsInMs: 4_320_000,
+    requests: 57,
+    enforced: true,
+    exhausted: true,
+    unlimited: false,
+  },
+  week: {
+    usedUsd: '13.000000',
+    limitUsd: '60.000000',
+    remainingUsd: '47.000000',
+    startedAt: '2026-09-29T00:00:00Z',
+    resetsAt: '2026-10-06T00:00:00Z',
+    resetsInMs: 86_400_000,
+    requests: 1204,
+    enforced: true,
+    exhausted: false,
+    unlimited: false,
+  },
+});
+
+/**
+ * Daily summary rows per days window. Multi-row bodies exercise the BigInt
+ * summation; numerics are STRINGS on the wire. by_model is ALL-TIME data
+ * (spend deliberately far from the period totals — the CLI must never mix
+ * it in).
+ */
+const USAGE_ROWS: Record<number, Array<Record<string, string>>> = {
+  1: [
+    { date: '2026-10-05', total_requests: '183', total_input_tokens: '2800000', total_output_tokens: '1100000', total_spend: '1.420000' },
+  ],
+  7: [
+    { date: '2026-10-05', total_requests: '204', total_input_tokens: '3100000', total_output_tokens: '1200000', total_spend: '1.600000' },
+    { date: '2026-10-04', total_requests: '1000', total_input_tokens: '15000000', total_output_tokens: '6000000', total_spend: '7.500000' },
+  ],
+  30: [
+    { date: '2026-10-05', total_requests: '204', total_input_tokens: '3100000', total_output_tokens: '1200000', total_spend: '1.600000' },
+    { date: '2026-10-04', total_requests: '1000', total_input_tokens: '15000000', total_output_tokens: '6000000', total_spend: '7.500000' },
+    { date: '2026-09-28', total_requests: '100', total_input_tokens: '2000000', total_output_tokens: '500000', total_spend: '0.800000' },
+  ],
+};
+
+export const USAGE_BY_MODEL = [
+  { model_id: 'glm-5.3-flash', requests: 5210, spend: '40.120000' },
+  { model_id: 'gpt-5.2-mini', requests: 931, spend: '3.050000' },
+];
+
+export function usageBody(days: number): string {
+  const rows = USAGE_ROWS[days] ?? [];
+  return JSON.stringify({ summary: rows, by_model: USAGE_BY_MODEL, recent: [] });
+}
+
+export const USAGE_EMPTY_BODY = JSON.stringify({ summary: [], by_model: [], recent: [] });
+
+/** Internal flavor: the ONLY one that carries pricing (no auth header sent). */
+export const MODELS_BODY = JSON.stringify({
+  models: [
+    {
+      id: 'claude-haiku-4.5',
+      provider: 'anthropic',
+      status: 'active',
+      pricing: { input_per_1m: '1.000000', output_per_1m: '5.000000' },
+      display_name: 'Claude Haiku 4.5',
+    },
+    {
+      id: 'glm-5.3-flash',
+      provider: 'openai',
+      status: 'active',
+      pricing: { input_per_1m: '0.300000', output_per_1m: '0.600000' },
+      display_name: 'GLM 5.3 Flash',
+      supports_1m_context: true,
+    },
+    {
+      id: 'gpt-5.2-mini',
+      provider: 'openai',
+      status: 'active',
+      pricing: { input_per_1m: '0.400000', output_per_1m: '1.600000' },
+      display_name: 'GPT 5.2 Mini',
+    },
+    {
+      id: 'kimi-k2',
+      provider: 'openai',
+      status: 'inactive',
+      pricing: { input_per_1m: '0.600000', output_per_1m: '2.500000' },
+      display_name: 'Kimi K2',
+    },
+  ],
+});
+
+/** Detail flavor: limits is raw JSONB ({} on the real gateway). */
+export function modelDetailBody(id: string, limits: Record<string, unknown> = {}): string {
+  const known: Record<string, { provider: string; status: string; input: string; output: string; display_name: string }> = {
+    'glm-5.3-flash': { provider: 'openai', status: 'active', input: '0.300000', output: '0.600000', display_name: 'GLM 5.3 Flash' },
+    'claude-haiku-4.5': { provider: 'anthropic', status: 'active', input: '1.000000', output: '5.000000', display_name: 'Claude Haiku 4.5' },
+  };
+  const m = known[id];
+  return JSON.stringify({
+    model: {
+      id,
+      provider: m?.provider ?? 'openai',
+      status: m?.status ?? 'active',
+      pricing: { input_per_1m: m?.input ?? '0.300000', output_per_1m: m?.output ?? '0.600000' },
+      limits,
+      metadata: {},
+      display_name: m?.display_name ?? id,
+    },
+  });
+}
+
+export const MODEL_NOT_FOUND_404 = JSON.stringify({
+  error: { code: 'not_found', message: 'Model not available', request_id: 'req_model_404' },
+});
+
+/** Keys list with a named key, an unnamed key, a revoked key, and a ghost (404 on delete). */
+export const KEYS_LIST_BODY = JSON.stringify({
+  keys: [
+    {
+      id: 'key_1',
+      name: 'laptop',
+      key_hint: 'ABCD',
+      status: 'active',
+      created_at: '2026-09-01T00:00:00Z',
+      last_used_at: '2026-10-04T00:00:00Z',
+      model_ids: [],
+      rate_limit_rpm: null,
+      emoji: null,
+      color: null,
+      request_count: 42,
+    },
+    {
+      id: 'key_2',
+      name: null,
+      key_hint: 'WXYZ',
+      status: 'active',
+      created_at: '2026-09-02T00:00:00Z',
+      last_used_at: null,
+      model_ids: [],
+      rate_limit_rpm: null,
+      emoji: null,
+      color: null,
+      request_count: 0,
+    },
+    {
+      id: 'key_3',
+      name: 'old-laptop',
+      key_hint: 'DEAD',
+      status: 'revoked',
+      created_at: '2026-08-01T00:00:00Z',
+      last_used_at: '2026-08-20T00:00:00Z',
+      revoked_at: '2026-09-10T00:00:00Z',
+      model_ids: [],
+      rate_limit_rpm: null,
+      emoji: null,
+      color: null,
+      request_count: 7,
+    },
+    {
+      id: 'key_4',
+      name: 'ghost',
+      key_hint: 'GOST',
+      status: 'active',
+      created_at: '2026-09-03T00:00:00Z',
+      last_used_at: '2026-09-30T00:00:00Z',
+      model_ids: [],
+      rate_limit_rpm: null,
+      emoji: null,
+      color: null,
+      request_count: 3,
+    },
+  ],
+});
+
+export const KEYS_EMPTY_BODY = JSON.stringify({ keys: [] });
+
+export const DELETE_KEY_SOFT = DELETE_KEY_OK;
+export const DELETE_KEY_HARD = JSON.stringify({ ok: true, id: 'key_2', deleted: true, deletion: 'hard' });

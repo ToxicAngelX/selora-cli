@@ -6,6 +6,11 @@ import { defaultIo, type CliContext, type CliIo } from './context.js';
 import { runLogin } from './commands/login.js';
 import { runLogout } from './commands/logout.js';
 import { runWhoami } from './commands/whoami.js';
+import { runBalance } from './commands/balance.js';
+import { runUsage } from './commands/usage.js';
+import { runModels } from './commands/models.js';
+import { runModel } from './commands/model.js';
+import { runKeys } from './commands/keys.js';
 import { Renderer } from './terminal/render.js';
 
 /**
@@ -47,7 +52,7 @@ export async function main(argv: string[], io: CliIo = defaultIo()): Promise<voi
     };
   };
 
-  program
+  const loginCmd = program
     .command('login')
     .description('log in with email + password (creates a CLI API key), or validate an existing key')
     .option('--debug', 'show request/response details (always redacted)')
@@ -59,10 +64,10 @@ export async function main(argv: string[], io: CliIo = defaultIo()): Promise<voi
       const flags = {
         key: typeof key === 'string' ? key : key === true ? true : undefined,
       };
-      await runLogin(ctxFor(program.commands[0]!), flags);
+      await runLogin(ctxFor(loginCmd), flags);
     });
 
-  program
+  const logoutCmd = program
     .command('logout')
     .description('clear the stored API key (optionally revoke it server-side)')
     .option('--debug', 'show request/response details (always redacted)')
@@ -71,20 +76,94 @@ export async function main(argv: string[], io: CliIo = defaultIo()): Promise<voi
     .option('--revoke', 'also revoke the key on the server (matches by key hint)')
     .option('--yes', 'confirm --revoke non-interactively')
     .action(async (opts: Record<string, unknown>) => {
-      await runLogout(ctxFor(program.commands[1]!), {
+      await runLogout(ctxFor(logoutCmd), {
         revoke: opts['revoke'] === true,
         yes: opts['yes'] === true,
       });
     });
 
-  program
+  const whoamiCmd = program
     .command('whoami')
     .description('show the account, plan, trial, and wallet for the stored key')
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')
     .action(async () => {
-      await runWhoami(ctxFor(program.commands[2]!));
+      await runWhoami(ctxFor(whoamiCmd));
+    });
+
+  const balanceCmd = program
+    .command('balance')
+    .description('show wallet balance, plan term, and rolling spend windows')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .action(async () => {
+      await runBalance(ctxFor(balanceCmd));
+    });
+
+  const usageCmd = program
+    .command('usage')
+    .description('show request/token/spend usage (today, this week, or this month)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--today', 'usage for the last 1 day')
+    .option('--week', 'usage for the last 7 days')
+    .option('--month', 'usage for the last 30 days')
+    .option(
+      '--by-model',
+      'add the by-model table — labeled all-time because the API does not period-filter it',
+    )
+    .action(async (opts: Record<string, unknown>) => {
+      await runUsage(ctxFor(usageCmd), {
+        today: opts['today'] === true,
+        week: opts['week'] === true,
+        month: opts['month'] === true,
+        byModel: opts['byModel'] === true,
+      });
+    });
+
+  const modelsCmd = program
+    .command('models')
+    .description('list available models with pricing')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .action(async () => {
+      await runModels(ctxFor(modelsCmd));
+    });
+
+  const modelCmd = program
+    .command('model [id]')
+    .description('show the default model, or set it to <id>')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--unset', 'clear the configured default model')
+    .action(async (id: unknown, opts: Record<string, unknown>) => {
+      await runModel(
+        ctxFor(modelCmd),
+        typeof id === 'string' ? id : undefined,
+        { unset: opts['unset'] === true },
+      );
+    });
+
+  const keysCmd = program
+    .command('keys [action] [arg]')
+    .description('manage API keys (list, create, revoke; default: list)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--name <name>', 'name for the new key (keys create)')
+    .option('--yes', 'confirm revoke non-interactively (keys revoke)')
+    .action(async (action: unknown, arg: unknown, opts: Record<string, unknown>) => {
+      await runKeys(
+        ctxFor(keysCmd),
+        typeof action === 'string' ? action : undefined,
+        typeof arg === 'string' ? arg : undefined,
+        { name: typeof opts['name'] === 'string' ? opts['name'] : undefined, yes: opts['yes'] === true },
+      );
     });
 
   if (argv.length === 0) {

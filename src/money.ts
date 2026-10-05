@@ -33,10 +33,24 @@ export function parseMoneyMicro(raw: string): bigint | null {
 export function formatUsd(raw: string): string {
   const micro = parseMoneyMicro(raw);
   if (micro === null) return `$${raw}`;
+  return formatUsdMicro(micro);
+}
+
+/** Format micro-units (e.g. a BigInt sum) as `$1.23` — same rules as formatUsd. */
+export function formatUsdMicro(micro: bigint): string {
   const negative = micro < 0n;
   const abs = negative ? -micro : micro;
   const dollars = abs / MICRO;
   const cents = (abs % MICRO) / 10000n; // truncation toward zero, display only
   const sign = negative ? '-' : '';
   return `${sign}$${dollars}.${cents.toString().padStart(2, '0')}`;
+}
+
+/** Render micro-units back to a scale-6 wire-style decimal string ("9.100000"). */
+export function microToWireString(micro: bigint): string {
+  const negative = micro < 0n;
+  const abs = negative ? -micro : micro;
+  const whole = abs / MICRO;
+  const frac = (abs % MICRO).toString().padEnd(SCALE, '0').slice(0, SCALE);
+  return `${negative ? '-' : ''}${whole}.${frac}`;
 }
