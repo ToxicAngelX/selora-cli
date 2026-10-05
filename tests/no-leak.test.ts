@@ -14,9 +14,13 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { startMockServer, type MockServer } from './mock/server.js';
 import {
   CHAT_STREAM_FULL,
+  CHAT_STREAM_TOOL_CALLS,
   EMAIL,
   FAKE_JWT,
   FAKE_KEY_CREATED,
@@ -242,5 +246,49 @@ describe('no-leak (hard rule: credentials never appear in output, even in debug 
     expect(text).toContain('Hello, world!');
     expect(text).toContain('Tokens: 6,055');
     assertNoLeak(text, 'run');
+  });
+
+  it('run AGENT round in debug mode: tool executes on a file holding a real-looking key — never printed', async () => {
+    // The canary mechanism (like redact.test.ts): the INPUT file legitimately
+    // contains a real-looking key; no CLI output byte may carry it.
+    const dir = mkdtempSync(join(tmpdir(), 'selora-noleak-'));
+    try {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(
+        join(dir, 'src', 'index.ts'),
+        `const key = '${REAL_LOOKING_KEY}';\n`,
+        'utf8',
+      );
+      let calls = 0;
+      server.setHandler((req) => {
+        if (req.method === 'POST' && req.path === '/v1/chat/completions') {
+          if ((req.headers['authorization'] ?? '') !== `Bearer ${FAKE_KEY_USER}`) {
+            return { status: 401, body: '{"error":{"code":"auth","message":"bad key"}}' };
+          }
+          calls += 1;
+          // round 1: read_file(src/index.ts); then the plain answer
+          return { status: 200, sse: calls === 1 ? CHAT_STREAM_TOOL_CALLS : CHAT_STREAM_FULL };
+        }
+        return { status: 404, body: '{"error":{"code":"not_found","message":"no fixture"}}' };
+      });
+      saveConfig({ apiKey: FAKE_KEY_USER });
+      const { io, cap } = capturedIo();
+      const c: CliContext = {
+        debug: true,
+        json: false,
+        apiUrl: server.url,
+        io: { ...io, stdin: pipedStdin(['y']) },
+      };
+      await runRun(c, 'read src/index.ts', { cwd: dir, yes: false });
+      const text = `${cap.all()}\n${cap.outText()}\n${cap.errText()}`;
+      // the agent round really ran in debug: both requests + the tool execution
+      expect(text.match(/→ POST \/v1\/chat\/completions/g)?.length).toBe(2);
+      expect(text).toContain('→ read_file(src/index.ts)');
+      expect(text).toContain('· read src/index.ts');
+      expect(text).toContain('Hello, world!');
+      assertNoLeak(text, 'run-agent');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

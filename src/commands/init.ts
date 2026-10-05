@@ -5,9 +5,9 @@
  * the pricing-bearing internal flavor) BEFORE anything is written; a 404
  * prints the backend's honest "Model not available" and no file appears.
  *
- * Honesty is the point of the gray bullet: v0.1 stores this file only — the
- * context globs are saved for the future agent and are NOT read yet
- * (docs/agent.md).
+ * The gray bullet after the write is the v0.2 truth: the agent reads the
+ * context exclude globs (and the optional hand-edited "agent" section);
+ * context.include stays advisory.
  */
 
 import { existsSync } from 'node:fs';
@@ -100,6 +100,6 @@ export async function runInit(ctx: CliContext, flags: InitFlags): Promise<void> 
 
   r.ok(`Wrote selora.json (model: ${modelId})`);
   r.bullet(
-    'v0.1 stores this config only — context globs are saved for the future agent and are NOT read yet (see docs/agent.md)',
+    'the agent enforces context.exclude for read/search tools; an optional "agent" section (maxTurns, allowWindowsCmd) can be hand-edited (see docs/agent.md)',
   );
 }

@@ -12,7 +12,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMockServer, type MockServer } from './mock/server.js';
@@ -102,7 +102,7 @@ describe('init', () => {
       // honest messaging
       expect(cap.out.join('\n')).toContain('✓ Wrote selora.json (model: glm-5.3-flash)');
       expect(cap.err.join('\n')).toContain(
-        '· v0.1 stores this config only — context globs are saved for the future agent and are NOT read yet (see docs/agent.md)',
+        '· the agent enforces context.exclude for read/search tools; an optional "agent" section (maxTurns, allowWindowsCmd) can be hand-edited (see docs/agent.md)',
       );
       // the verification request carried NO auth header (public internal flavor)
       const modelReq = server.requests.find((r) => r.path === '/v1/models/glm-5.3-flash');
@@ -233,7 +233,7 @@ describe('init', () => {
 // ---------------------------------------------------------------------------
 
 describe('run', () => {
-  it('one-shot: streams deltas raw to stdout + the real-numbers footer, same wire body as chat', async () => {
+  it('one-shot: streams deltas raw to stdout + the real-numbers footer; run requests carry the agent tool definitions', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installRoutes(CHAT_STREAM_FULL);
     const before = server.requests.length;
@@ -245,37 +245,120 @@ describe('run', () => {
     expect(cap.errText()).toBe('(thinking about it)\n');
     // footer: real numbers only (usage chunk DID arrive), chat's formatting
     expect(cap.out.join('\n')).toContain('  Tokens: 6,055 · Cost: $0.018');
-    // the request body: single user message, same pipeline as chat
+    // the request body: single user message + the agent tool bridge
     const chatReq = server.requests.slice(before).find((r) => r.path === '/v1/chat/completions');
-    expect(JSON.parse(chatReq!.body)).toEqual({
-      model: 'glm-5.3-flash',
-      messages: [{ role: 'user', content: 'hello there' }],
-      stream: true,
-      stream_options: { include_usage: true },
-    });
+    const body = JSON.parse(chatReq!.body) as Record<string, unknown>;
+    expect(body['model']).toBe('glm-5.3-flash');
+    expect(body['messages']).toEqual([{ role: 'user', content: 'hello there' }]);
+    expect(body['stream']).toBe(true);
+    expect(body['stream_options']).toEqual({ include_usage: true });
+    // v0.2: run attaches the built-in tool definitions (OpenAI dialect)
+    expect(body['tool_choice']).toBe('auto');
+    const tools = body['tools'] as Array<Record<string, unknown>>;
+    const toolNames = (tools.map((t) => (t['function'] as Record<string, unknown>)['name']) as string[]);
+    expect(toolNames).toEqual([
+      'read_file',
+      'write_file',
+      'edit_file',
+      'glob',
+      'grep',
+      'run_command',
+      'git_status',
+      'git_diff',
+      'git_log',
+      'git_commit',
+      'git_restore',
+    ]);
+    // each definition is the verified wire shape
+    for (const t of tools) {
+      expect(t['type']).toBe('function');
+      const fn = t['function'] as Record<string, unknown>;
+      expect(typeof fn['description']).toBe('string');
+      expect((fn['parameters'] as Record<string, unknown>)['type']).toBe('object');
+    }
     // no model-verification request — run does not pre-verify (the gateway
     // rejects unknown models at request time)
     expect(server.requests.slice(before).some((r) => r.path.startsWith('/v1/models/'))).toBe(false);
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('finish_reason tool_calls + a tool_calls delta → the honest agent-mode line (real detection)', async () => {
+  it('tool_calls: permission prompt (stdin closed → deny), result fed back, second stream answers — no v0.1 gray line', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
-    installRoutes(CHAT_STREAM_TOOL_CALLS);
-    const { io, cap } = capturedIo();
-    await runRun(ctx(io), 'what does src/index.ts do?', {});
-    expect(cap.outText()).toContain('I would read a file for that.');
-    expect(cap.out.join('\n')).toContain('  Tokens: 240 · Cost: $0.002');
-    expect(cap.err.join('\n')).toContain('· agent mode not implemented yet — see docs/agent.md');
-    expect(process.exitCode).toBeUndefined();
+    const dir = tempProject();
+    try {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'index.ts'), 'export const x = 1;\n', 'utf8');
+      // first request → the tool-call stream; every later request → the plain answer
+      let chatCalls = 0;
+      server.setHandler((req) => {
+        if (req.method === 'POST' && req.path === '/v1/chat/completions') {
+          if ((req.headers['authorization'] ?? '') !== `Bearer ${FAKE_KEY_USER}`) {
+            return { status: 401, body: REVOKED_KEY_401 };
+          }
+          chatCalls += 1;
+          return { status: 200, sse: chatCalls === 1 ? CHAT_STREAM_TOOL_CALLS : CHAT_STREAM_FULL };
+        }
+        return { status: 404, body: NOT_FOUND };
+      });
+      const before = server.requests.length;
+      const { io, cap } = capturedIo();
+      await runRun(ctx(io), 'what does src/index.ts do?', { cwd: dir });
+      // both turns streamed their content
+      expect(cap.outText()).toContain('I would read a file for that.');
+      expect(cap.outText()).toContain('Hello, world!');
+      // live tool progress: the call line, the dry-run preview prompt, the denial
+      const err = cap.errText() + cap.err.join('\n');
+      expect(err).toContain('→ read_file(src/index.ts)');
+      expect(err).toContain('└─ Allow? [y]es / [n]o / [a]lways this session');
+      expect(err).toContain('· denied by user');
+      expect(err).toContain('permission prompt closed without an answer — treating as no');
+      // per-turn footers (240 then 6,055) and the cumulative line
+      const out = cap.out.join('\n');
+      expect(out).toContain('  Tokens: 240 · Cost: $0.002');
+      expect(out).toContain('  Tokens: 6,055 · Cost: $0.018');
+      expect(out).toContain('Agent totals: 2 turns · Tokens: 6,295 · Cost: $0.020');
+      // the v0.1 gray line is GONE — this is real execution now
+      expect(err).not.toContain('agent mode not implemented');
+      // exactly two chat requests; the second carried the tool echo + result
+      const chatReqs = server.requests.slice(before).filter((r) => r.path === '/v1/chat/completions');
+      expect(chatReqs).toHaveLength(2);
+      const second = JSON.parse(chatReqs[1]!.body) as {
+        messages: Array<Record<string, unknown>>;
+      };
+      // [user, assistant echo with tool_calls, tool result] — the echo carries
+      // the streamed content + the calls verbatim (the verified round-trip shape)
+      expect(second.messages).toHaveLength(3);
+      expect(second.messages[0]).toEqual({ role: 'user', content: 'what does src/index.ts do?' });
+      const echo = second.messages[1] as Record<string, unknown>;
+      expect(echo['role']).toBe('assistant');
+      expect(echo['content']).toBe('I would read a file for that.');
+      expect(echo['tool_calls']).toEqual([
+        {
+          id: 'call_TEST1',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"src/index.ts"}' },
+        },
+      ]);
+      expect(second.messages[2]).toEqual({
+        role: 'tool',
+        tool_call_id: 'call_TEST1',
+        content: 'Permission denied by user.',
+      });
+      // the follow-up request carries the tool definitions again
+      expect((JSON.parse(chatReqs[1]!.body) as { tools: unknown[] }).tools.length).toBe(11);
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('a plain reply never prints the agent-mode line (negative control)', async () => {
+  it('a plain reply never prints tool activity (negative control)', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installRoutes(CHAT_STREAM_FULL);
     const { io, cap } = capturedIo();
     await runRun(ctx(io), 'read the file please', {});
     expect(cap.err.join('\n')).not.toContain('agent mode not implemented');
+    expect(cap.errText()).not.toContain('→ ');
   });
 
   it('402 window-exhausted before the stream: verbatim message + exit 1', async () => {
@@ -371,6 +454,8 @@ describe('run', () => {
       model: 'glm-5.3-flash',
       content: 'Hello, world!',
       finishReason: 'stop',
+      turns: 1,
+      tools: [],
       usage: { promptTokens: 4821, completionTokens: 1234, totalTokens: 6055 },
       charge: '0.018234',
     });

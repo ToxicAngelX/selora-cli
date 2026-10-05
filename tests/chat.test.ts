@@ -20,6 +20,8 @@ import {
   CHAT_STREAM_SECOND,
   CHAT_STREAM_SPLIT,
   CHAT_STREAM_TOOL_CALLS,
+  CHAT_STREAM_TOOL_CALLS_PARALLEL,
+  CHAT_STREAM_TOOL_CALL_SPLIT_ARGS,
   FAKE_KEY_USER,
   MODEL_NOT_FOUND_404,
   RATE_LIMIT_429,
@@ -141,6 +143,106 @@ describe('streamChat', () => {
     expect(result.toolCallsRequested).toBe(true);
     expect(result.usage).toEqual({ promptTokens: 200, completionTokens: 40, totalTokens: 240 });
     expect(result.charge).toBe('0.002000');
+  });
+
+  it('tool_calls FRAGMENTS accumulate: arguments split across chunks (mid-token) assemble whole', async () => {
+    server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_TOOL_CALL_SPLIT_ARGS }));
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      { onDelta: () => {} },
+    );
+    expect(result.toolCallsRequested).toBe(true);
+    expect(result.toolCalls).toEqual([
+      { id: 'call_SPLIT1', name: 'read_file', arguments: '{"path":"src/index.ts"}' },
+    ]);
+    expect(result.finishReason).toBe('tool_calls');
+    expect(result.usage).toEqual({ promptTokens: 40, completionTokens: 10, totalTokens: 50 });
+    expect(result.charge).toBe('0.000400');
+  });
+
+  it('PARALLEL tool calls: two calls in one delta arrive as two decoded calls, in index order', async () => {
+    server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_TOOL_CALLS_PARALLEL }));
+    const result = await streamChat(
+      keyClient(),
+      { model: 'glm-5.3-flash', messages: MESSAGES },
+      { onDelta: () => {} },
+    );
+    expect(result.toolCalls).toEqual([
+      {
+        id: 'call_PAR1',
+        name: 'write_file',
+        arguments: '{"path":"out.txt","content":"hi"}',
+      },
+      { id: 'call_PAR2', name: 'read_file', arguments: '{"path":"src/index.ts"}',
+      },
+    ]);
+  });
+
+  it('the agent round-trip wire shape: tools in the request, tool echo + tool result in messages', async () => {
+    server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_FULL }));
+    await streamChat(
+      keyClient(),
+      {
+        model: 'glm-5.3-flash',
+        messages: [
+          { role: 'user', content: 'read package.json' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_RT1',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"path":"package.json"}' },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'call_RT1', content: '{"name":"selora"}' },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'read_file',
+              description: 'Read a file',
+              parameters: { type: 'object', properties: { path: { type: 'string' } } },
+            },
+          },
+        ],
+      },
+      { onDelta: () => {} },
+    );
+    const body = JSON.parse(server.requests.at(-1)!.body) as Record<string, unknown>;
+    // the tool definitions ride along verbatim, with tool_choice auto
+    expect(body['tools']).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'read_file',
+          description: 'Read a file',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        },
+      },
+    ]);
+    expect(body['tool_choice']).toBe('auto');
+    // the assistant echo keeps content:null + tool_calls; the tool message
+    // keeps tool_call_id + content — exactly the verified round-trip shape
+    expect(body['messages']).toEqual([
+      { role: 'user', content: 'read package.json' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_RT1',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"package.json"}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_RT1', content: '{"name":"selora"}' },
+    ]);
   });
 
   it('buffers events split mid-JSON across SSE frames', async () => {

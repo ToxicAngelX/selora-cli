@@ -51,6 +51,7 @@ export function microToWireString(micro: bigint): string {
   const negative = micro < 0n;
   const abs = negative ? -micro : micro;
   const whole = abs / MICRO;
-  const frac = (abs % MICRO).toString().padEnd(SCALE, '0').slice(0, SCALE);
+  // padStart: 18234 micro ($0.018234) is "0.018234", not "0.182340".
+  const frac = (abs % MICRO).toString().padStart(SCALE, '0').slice(0, SCALE);
   return `${negative ? '-' : ''}${whole}.${frac}`;
 }

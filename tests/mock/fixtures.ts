@@ -628,6 +628,144 @@ export const CHAT_STREAM_TOOL_CALLS: string[] = [
   'data: [DONE]\n\n',
 ];
 
+/**
+ * Tool-call stream with the arguments string split across MULTIPLE delta
+ * chunks (the accumulation contract): the first chunk carries id + name +
+ * the start of the arguments JSON, three more chunks each append a fragment
+ * (one is split mid-token: 'src/in' + 'dex.ts"}'), then the finish chunk.
+ * Total call: read_file {"path":"src/index.ts"}, usage {40,10,50}.
+ */
+export const CHAT_STREAM_TOOL_CALL_SPLIT_ARGS: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'call_SPLIT1', type: 'function', function: { name: 'read_file', arguments: '{"pa' } },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"src/in' } }] },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: { tool_calls: [{ index: 0, function: { arguments: 'dex.ts"}' } }] },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+    gateway: { charge: '0.000400', request_id: 'req_chat_split_args' },
+  }),
+  'data: [DONE]\n\n',
+];
+
+/**
+ * PARALLEL tool calls: two complete calls in one delta (a write and a read),
+ * finish_reason 'tool_calls', usage {60, 20, 80}.
+ */
+export const CHAT_STREAM_TOOL_CALLS_PARALLEL: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_PAR1',
+              type: 'function',
+              function: { name: 'write_file', arguments: '{"path":"out.txt","content":"hi"}' },
+            },
+            {
+              index: 1,
+              id: 'call_PAR2',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"src/index.ts"}' },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 60, completion_tokens: 20, total_tokens: 80 },
+    gateway: { charge: '0.000800', request_id: 'req_chat_parallel' },
+  }),
+  'data: [DONE]\n\n',
+];
+
+/** A tool-call stream whose call names a tool that does not exist. */
+export const CHAT_STREAM_TOOL_CALL_UNKNOWN: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'call_GHOST', type: 'function', function: { name: 'nonexistent_tool', arguments: '{}' } },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+    gateway: { charge: '0.000200', request_id: 'req_chat_unknown_tool' },
+  }),
+  'data: [DONE]\n\n',
+];
+
+/** A tool-call stream whose arguments JSON is malformed. */
+export const CHAT_STREAM_TOOL_CALL_BAD_JSON: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'call_BADJSON', type: 'function', function: { name: 'read_file', arguments: '{not json' } },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+    gateway: { charge: '0.000200', request_id: 'req_chat_bad_json' },
+  }),
+  'data: [DONE]\n\n',
+];
+
 /** Pre-stream 402: window exhausted, reset time ONLY inside the message text. */
 export const WINDOW_EXHAUSTED_402 = JSON.stringify({
   error: {

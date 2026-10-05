@@ -20,6 +20,7 @@ import { runKeys } from './commands/keys.js';
 import { runChat } from './commands/chat.js';
 import { runInit } from './commands/init.js';
 import { runRun } from './commands/run.js';
+import { runSessions } from './commands/sessions.js';
 import { runCompletion } from './commands/completion.js';
 
 export function buildProgram(io: CliIo): Command {
@@ -204,15 +205,47 @@ export function buildProgram(io: CliIo): Command {
   // command's own honest usage error rather than commander's generic one.
   const runCmd = program
     .command('run [prompt]')
-    .description('one-shot streaming completion for a prompt (no REPL)')
+    .description(
+      'one-shot streaming completion with the agent tool loop (permissions gated)',
+    )
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')
     .option('--model <id>', 'model for this request')
+    .option('--session <name>', 'resume/create a named conversation session')
+    .option('--safe', 'restrict the agent to read-only tools')
+    .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
+    .option('--max-turns <n>', 'agent turn cap (default: 25; selora.json agent.maxTurns)')
     .action(async (prompt: unknown, opts: Record<string, unknown>) => {
+      const maxTurnsRaw = opts['maxTurns'];
+      let maxTurns: number | undefined;
+      if (typeof maxTurnsRaw === 'string' && maxTurnsRaw.trim() !== '') {
+        const n = Number(maxTurnsRaw);
+        maxTurns = Number.isInteger(n) ? n : Number.NaN;
+      }
       await runRun(ctxFor(runCmd), typeof prompt === 'string' ? prompt : undefined, {
         model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
+        session: typeof opts['session'] === 'string' ? opts['session'] : undefined,
+        yes: opts['yes'] === true,
+        safe: opts['safe'] === true,
+        maxTurns,
       });
+    });
+
+  const sessionsCmd = program
+    .command('sessions [action] [name]')
+    .description('manage agent conversation sessions (list, show, rm; default: list)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--yes', 'confirm rm non-interactively')
+    .action(async (action: unknown, name: unknown, opts: Record<string, unknown>) => {
+      await runSessions(
+        ctxFor(sessionsCmd),
+        typeof action === 'string' ? action : undefined,
+        typeof name === 'string' ? name : undefined,
+        { yes: opts['yes'] === true },
+      );
     });
 
   // [shell] optional; runCompletion defaults from $SHELL when omitted.
