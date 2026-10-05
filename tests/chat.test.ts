@@ -19,6 +19,7 @@ import {
   CHAT_STREAM_NO_USAGE,
   CHAT_STREAM_SECOND,
   CHAT_STREAM_SPLIT,
+  CHAT_STREAM_TOOL_CALLS,
   FAKE_KEY_USER,
   MODEL_NOT_FOUND_404,
   RATE_LIMIT_429,
@@ -112,9 +113,23 @@ describe('streamChat', () => {
     expect(deltas.join('')).toBe('Hello, world!');
     expect(reasoning).toEqual(['(thinking about it)']);
     expect(result.finishReason).toBe('stop');
+    expect(result.toolCallsRequested).toBe(false);
     expect(result.usage).toEqual({ promptTokens: 4821, completionTokens: 1234, totalTokens: 6055 });
     expect(result.charge).toBe('0.018234');
     expect(result.requestId).toBe('req_chat_full');
+  });
+
+  it('tool_calls detection is real: a tool_calls delta + finish_reason "tool_calls" set the flag', async () => {
+    server.setHandler(() => ({ status: 200, sse: CHAT_STREAM_TOOL_CALLS }));
+    const deltas: string[] = [];
+    const result = await streamChat(keyClient(), { model: 'glm-5.3-flash', messages: MESSAGES }, {
+      onDelta: (t) => deltas.push(t),
+    });
+    expect(deltas.join('')).toBe('I would read a file for that.');
+    expect(result.finishReason).toBe('tool_calls');
+    expect(result.toolCallsRequested).toBe(true);
+    expect(result.usage).toEqual({ promptTokens: 200, completionTokens: 40, totalTokens: 240 });
+    expect(result.charge).toBe('0.002000');
   });
 
   it('buffers events split mid-JSON across SSE frames', async () => {

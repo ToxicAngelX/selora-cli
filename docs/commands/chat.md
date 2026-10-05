@@ -76,8 +76,8 @@ rotation message.
 
 `selora chat` needs an interactive terminal. With non-TTY stdin it prints
 `✗ selora chat needs an interactive terminal — use: selora run "<prompt>"`
-and exits 1. (`selora run` is the Phase 4 one-shot command; the message
-already points at it.)
+and exits 1. Scripted one-shot use belongs to `selora run`
+([run.md](run.md)).
 
 ## History
 
@@ -94,7 +94,7 @@ sends the full in-memory history (user + assistant messages).
 A streaming REPL is not machine-readable by nature. `--json` applies only to
 the pre-REPL failure paths (non-TTY stdin, model verification errors) — the
 REPL itself is always human-formatted. Scripted one-shot use belongs to
-`selora run` (Phase 4).
+`selora run --json` ([run.md](run.md)).
 
 ## `--debug`
 

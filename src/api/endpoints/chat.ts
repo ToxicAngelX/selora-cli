@@ -26,6 +26,13 @@ export interface ChatUsage {
 export interface ChatResult {
   /** finish_reason from the finish chunk; '' when the stream never sent one. */
   finishReason: string;
+  /**
+   * True when the model ACTUALLY requested tools on the wire: any delta (or
+   * non-streaming message) carried `tool_calls`, or the finish chunk's
+   * finish_reason was 'tool_calls'. This is real detection — never
+   * prompt-text guessing.
+   */
+  toolCallsRequested: boolean;
   /** Only set when a chunk actually carried a well-formed usage object. */
   usage: ChatUsage | undefined;
   /** Raw scale-6 decimal USD string from gateway.charge — the cost. */
@@ -85,6 +92,7 @@ export async function streamChat(
 ): Promise<ChatResult> {
   const result: ChatResult = {
     finishReason: '',
+    toolCallsRequested: false,
     usage: undefined,
     charge: undefined,
     requestId: undefined,
@@ -119,9 +127,13 @@ export async function streamChat(
       const choice = rec(choicesRaw[0]);
       if (choice !== null) {
         const finish = nonEmptyStr(choice, 'finish_reason');
-        if (finish !== undefined) result.finishReason = finish;
+        if (finish !== undefined) {
+          result.finishReason = finish;
+          if (finish === 'tool_calls') result.toolCallsRequested = true;
+        }
         const delta = rec(choice['delta']);
         if (delta !== null) {
+          if (Object.hasOwn(delta, 'tool_calls')) result.toolCallsRequested = true;
           const content = nonEmptyStr(delta, 'content');
           if (content !== undefined) callbacks.onDelta(content);
           const reasoning = nonEmptyStr(delta, 'reasoning_content');
@@ -130,6 +142,7 @@ export async function streamChat(
           // Non-streaming fallback shape: the whole completion in one payload.
           const message = rec(choice['message']);
           if (message !== null) {
+            if (Object.hasOwn(message, 'tool_calls')) result.toolCallsRequested = true;
             const content = nonEmptyStr(message, 'content');
             if (content !== undefined) callbacks.onDelta(content);
           }

@@ -511,6 +511,42 @@ export const CHAT_STREAM_HANG: string[] = [
   sseData({ choices: [{ index: 0, delta: { content: 'Star' }, finish_reason: null }] }),
 ];
 
+/**
+ * Tool-call stream: content delta → a delta carrying `tool_calls` → finish
+ * chunk with finish_reason 'tool_calls' → usage chunk → [DONE]. Exercises the
+ * run command's REAL wire-based tool detection (never prompt-text guessing).
+ * Usage {prompt 200, completion 40, total 240}, charge "0.002000".
+ */
+export const CHAT_STREAM_TOOL_CALLS: string[] = [
+  sseData(CHAT_ROLE_CHUNK),
+  sseData({ choices: [{ index: 0, delta: { content: 'I would read a file for that.' }, finish_reason: null }] }),
+  sseData({
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_TEST1',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"src/index.ts"}' },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  }),
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+  sseData({
+    choices: [],
+    usage: { prompt_tokens: 200, completion_tokens: 40, total_tokens: 240 },
+    gateway: { charge: '0.002000', request_id: 'req_chat_tools' },
+  }),
+  'data: [DONE]\n\n',
+];
+
 /** Pre-stream 402: window exhausted, reset time ONLY inside the message text. */
 export const WINDOW_EXHAUSTED_402 = JSON.stringify({
   error: {

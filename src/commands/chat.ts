@@ -24,8 +24,7 @@ import { streamChat, type ChatMessage } from '../api/endpoints/chat.js';
 import { getStoredKey } from '../auth/storage.js';
 import { PromptClosedError } from '../auth/prompts.js';
 import { Renderer } from '../terminal/render.js';
-import { formatCount } from '../format.js';
-import { formatUsd, formatUsdMicro, parseMoneyMicro } from '../money.js';
+import { chatFooterLine } from './chat-footer.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
 
 export interface ChatFlags {
@@ -56,21 +55,10 @@ function modelLabel(m: SessionModel): string {
 }
 
 /**
- * Per-reply cost display: formatUsd's 2 decimals would collapse a typical
- * per-message charge ("0.018234") to a meaningless "$0.01", so sub-dime
- * amounts show 3 decimals ("$0.018", same truncation-toward-zero rule).
- * Math is BigInt micro-units via the existing money helpers — never floats.
+ * Per-reply cost display lives in chat-footer.ts (shared with `selora run`):
+ * sub-dime amounts show 3 decimals ("$0.018") so a typical per-message charge
+ * does not collapse to "$0.01".
  */
-function formatChatCost(charge: string): string {
-  const micro = parseMoneyMicro(charge);
-  if (micro === null) return formatUsd(charge);
-  const abs = micro < 0n ? -micro : micro;
-  if (abs !== 0n && abs < 100_000n) {
-    const mills = abs / 1000n; // truncate toward zero
-    return `$0.${mills.toString().padStart(3, '0')}`;
-  }
-  return formatUsdMicro(micro);
-}
 
 export async function runChat(
   ctx: CliContext,
@@ -258,13 +246,8 @@ export async function runChat(
       if (sawReasoning) r.writeRawGray('\n');
       r.writeRaw('\n');
       history.push({ role: 'assistant', content });
-      if (result.usage !== undefined) {
-        const parts = [`Tokens: ${formatCount(BigInt(result.usage.totalTokens))}`];
-        if (result.charge !== undefined && result.charge !== '') {
-          parts.push(`Cost: ${formatChatCost(result.charge)}`);
-        }
-        r.gray(`  ${parts.join(' · ')}`);
-      }
+      const footer = chatFooterLine(result.usage, result.charge);
+      if (footer !== undefined) r.gray(footer);
     } catch (err) {
       if (content !== '') r.writeRaw('\n'); // end the partial line
       if (err instanceof SeloraApiError && err.kind === 'cancelled') {

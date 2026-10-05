@@ -12,6 +12,8 @@ import { runModels } from './commands/models.js';
 import { runModel } from './commands/model.js';
 import { runKeys } from './commands/keys.js';
 import { runChat } from './commands/chat.js';
+import { runInit } from './commands/init.js';
+import { runRun } from './commands/run.js';
 import { Renderer } from './terminal/render.js';
 
 /**
@@ -178,6 +180,38 @@ export async function main(argv: string[], io: CliIo = defaultIo()): Promise<voi
       await runChat(ctxFor(chatCmd), {
         model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
       });
+    });
+
+  const initCmd = program
+    .command('init')
+    .description('write a project-local selora.json (model + future agent context globs)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--model <id>', 'model to store (default: the configured default model)')
+    .option('--force', 'overwrite an existing selora.json')
+    .action(async (opts: Record<string, unknown>) => {
+      await runInit(ctxFor(initCmd), {
+        model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
+        force: opts['force'] === true,
+      });
+    });
+
+  // [prompt] (optional at the commander level) so a missing argument gets the
+  // command's own honest usage error rather than commander's generic one.
+  const runCmd = program
+    .command('run [prompt]')
+    .description('one-shot streaming completion for a prompt (no REPL)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--model <id>', 'model for this request')
+    .action(async (prompt: unknown, opts: Record<string, unknown>) => {
+      await runRun(
+        ctxFor(runCmd),
+        typeof prompt === 'string' ? prompt : undefined,
+        { model: typeof opts['model'] === 'string' ? opts['model'] : undefined },
+      );
     });
 
   if (argv.length === 0) {
