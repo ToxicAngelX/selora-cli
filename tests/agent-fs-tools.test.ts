@@ -169,7 +169,10 @@ describe('create_dir', () => {
   itPosix('refuses a system-folder target (the guard is shared with remove)', async () => {
     const root = tempRoot();
     try {
-      const res = await createDirTool.run({ path: '/etc/agent-test' }, ctx(root, true, ['/etc']));
+      // Grants are the RESOLVED dir in real sessions (the loop grants
+      // grantDirFor(resolved abs)) — on macOS /etc resolves to /private/etc.
+      const etc = realpathSync('/etc');
+      const res = await createDirTool.run({ path: '/etc/agent-test' }, ctx(root, true, [etc]));
       expect(res.ok).toBe(false);
       expect(res.summary).toContain('system folder');
     } finally {
@@ -423,8 +426,10 @@ describe('remove', () => {
   itPosix('a guarded path fails even in dry-run — no prompting, no claimed success', async () => {
     const root = tempRoot();
     try {
-      // /etc is granted for the session, yet the guard still refuses it
-      const res = await removeTool.run({ path: '/etc' }, ctx(root, true, ['/etc']));
+      // /etc is granted for the session (as its RESOLVED form — macOS maps
+      // /etc → /private/etc), yet the guard still refuses it
+      const etc = realpathSync('/etc');
+      const res = await removeTool.run({ path: '/etc' }, ctx(root, true, [etc]));
       expect(res.ok).toBe(false);
       expect(res.summary).toContain('refus');
       expect(res.outside).toBeUndefined();
