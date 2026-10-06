@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export interface ConfigFile {
@@ -40,7 +40,9 @@ export function configDir(env: NodeJS.ProcessEnv = process.env): string {
     return join(env['APPDATA'], 'selora');
   }
   const xdg = env['XDG_CONFIG_HOME'];
-  if (xdg !== undefined && xdg.trim() !== '' && xdg.startsWith('/')) {
+  // Absolute on any platform (isAbsolute covers 'C:\\' on Windows); a relative
+  // XDG value is ignored per spec, falling back to ~/.config/selora.
+  if (xdg !== undefined && xdg.trim() !== '' && isAbsolute(xdg)) {
     return join(xdg, 'selora');
   }
   return join(homedir(), '.config', 'selora');
