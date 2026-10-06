@@ -36,14 +36,16 @@ const CONFIG_FILENAME = 'config.json';
 
 /** Resolve the config directory: XDG_CONFIG_HOME/selora, else ~/.config/selora. */
 export function configDir(env: NodeJS.ProcessEnv = process.env): string {
-  if (process.platform === 'win32' && env['APPDATA'] && env['APPDATA'].trim() !== '') {
-    return join(env['APPDATA'], 'selora');
-  }
+  // XDG_CONFIG_HOME wins on EVERY platform when set to an absolute path — it is
+  // the most specific override (tests rely on it; power users may set it on
+  // Windows too). A relative XDG value is ignored per spec.
   const xdg = env['XDG_CONFIG_HOME'];
-  // Absolute on any platform (isAbsolute covers 'C:\\' on Windows); a relative
-  // XDG value is ignored per spec, falling back to ~/.config/selora.
   if (xdg !== undefined && xdg.trim() !== '' && isAbsolute(xdg)) {
     return join(xdg, 'selora');
+  }
+  // Windows native convention: %APPDATA%\selora.
+  if (process.platform === 'win32' && env['APPDATA'] && env['APPDATA'].trim() !== '') {
+    return join(env['APPDATA'], 'selora');
   }
   return join(homedir(), '.config', 'selora');
 }
