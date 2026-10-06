@@ -7,9 +7,18 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+/**
+ * macOS note: tmpdir() may sit behind a symlink (/var → /private/var); the path
+ * sandbox resolves the project root to its realpath, so tests hand it the real
+ * path up front.
+ */
+function tempRealRoot(): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), 'selora-paths-')));
+}
 import {
   effectiveExcludeGlobs,
   isExcludedRel,
@@ -22,7 +31,7 @@ import { projectConfigPath } from '../src/config/project.js';
 
 describe('resolveToolPath — containment', () => {
   it('relative paths resolve against the root; absolute paths must be inside it', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'selora-paths-'));
+    const dir = tempRealRoot();
     try {
       const rel = resolveToolPath(dir, 'src/a.ts');
       expect(rel.ok).toBe(true);
@@ -41,7 +50,7 @@ describe('resolveToolPath — containment', () => {
   });
 
   it('.. climbs are refused; NUL bytes and non-strings are refused honestly', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'selora-paths-'));
+    const dir = tempRealRoot();
     try {
       const climb = resolveToolPath(dir, 'a/../../escape');
       expect(climb.ok).toBe(false);
@@ -85,7 +94,7 @@ describe('resolveToolPath — containment', () => {
 
   it('statPath and the size cap constant', () => {
     expect(MAX_TOOL_FILE_BYTES).toBe(256 * 1024);
-    const dir = mkdtempSync(join(tmpdir(), 'selora-paths-'));
+    const dir = tempRealRoot();
     try {
       writeFileSync(join(dir, 'f.txt'), 'hello', 'utf8');
       const st = statPath(join(dir, 'f.txt'));
@@ -100,7 +109,7 @@ describe('resolveToolPath — containment', () => {
 
 describe('exclude globs', () => {
   it('uses the project selora.json context.exclude when present', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'selora-paths-'));
+    const dir = tempRealRoot();
     try {
       const exclude = ['**', 'node_modules', '**'].join('/');
       writeFileSync(
@@ -118,7 +127,7 @@ describe('exclude globs', () => {
   });
 
   it('falls back to the shipped defaults (node_modules + dist) with no selora.json', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'selora-paths-'));
+    const dir = tempRealRoot();
     try {
       const excl = effectiveExcludeGlobs(dir);
       expect(excl).toEqual([

@@ -55,7 +55,10 @@ export function resolveToolPath(root: string, input: unknown): PathResolution {
   if (!inside(rootReal, abs)) {
     return { ok: false, error: `path resolves outside the project root (symlink?): ${input}` };
   }
-  return { ok: true, abs, rel: relative(rootReal, abs) };
+  // rel is the user-facing, wire-facing form: forward slashes on every platform
+  // (path.relative yields '\\' on Windows otherwise, and every summary, preview,
+  // and glob match is written against '/'-separated rels).
+  return { ok: true, abs, rel: relative(rootReal, abs).split(sep).join('/') };
 }
 
 /** realpath when the whole path exists; else realpath of the deepest existing ancestor + the rest. */

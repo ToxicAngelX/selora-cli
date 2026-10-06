@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -265,7 +265,9 @@ describe('tokenizeCommand', () => {
   });
 });
 
-describe('run_command (POSIX)', () => {
+// These spawn real POSIX binaries (printf/ls/sleep) and assert no-shell behavior
+// that only exists on POSIX. Windows has its own refusal tests below.
+describe.skipIf(process.platform === 'win32')('run_command (POSIX)', () => {
   it('spawns argv directly: output captured as content, exit 0 is ok', async () => {
     const root = tempRoot();
     try {
@@ -284,7 +286,9 @@ describe('run_command (POSIX)', () => {
       // `pwd` proves the cwd; `echo a; touch pwned` proves no shell ran
       const res = await runCommandTool.run({ command: 'pwd' }, ctx(root));
       expect(res.ok).toBe(true);
-      expect((res.content ?? '').trim()).toBe(root);
+      // macOS: cwd reports the realpath (/private/var/... vs /var/...); compare
+      // resolved real paths, not literal strings.
+      expect(realpathSync((res.content ?? '').trim())).toBe(realpathSync(root));
       const evil = await runCommandTool.run({ command: 'echo a; touch pwned' }, ctx(root));
       expect(evil.ok).toBe(true); // echo printed the literal argument...
       expect(evil.content).toContain('a; touch pwned');
