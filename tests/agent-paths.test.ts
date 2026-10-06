@@ -36,7 +36,8 @@ describe('resolveToolPath — containment', () => {
       const rel = resolveToolPath(dir, 'src/a.ts');
       expect(rel.ok).toBe(true);
       if (rel.ok) {
-        expect(rel.rel).toBe(join('src', 'a.ts'));
+        // rel is '/'-separated on every platform (see paths.ts)
+        expect(rel.rel).toBe('src/a.ts');
         expect(pathExists(rel.abs)).toBe(false);
       }
       const absInside = resolveToolPath(dir, join(dir, 'b.ts'));

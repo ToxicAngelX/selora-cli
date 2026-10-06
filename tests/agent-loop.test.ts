@@ -247,7 +247,8 @@ describe('agent loop — permission paths', () => {
     }
   });
 
-  it("[e]dit: the user replaces the command; the REPLACEMENT runs, not the original", async () => {
+  // Spawns a real POSIX binary (printf) — on Windows run_command is opt-in only.
+  it.skipIf(process.platform === 'win32')("[e]dit: the user replaces the command; the REPLACEMENT runs, not the original", async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     const dir = tempProject();
     try {

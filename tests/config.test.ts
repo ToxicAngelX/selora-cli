@@ -30,7 +30,9 @@ describe('config', () => {
     }
   });
 
-  it('falls back to ~/.config/selora without XDG', () => {
+  // The ~/.config fallback is a POSIX convention; on Windows without XDG the
+  // APPDATA path is used instead (covered by its own guard below).
+  it.skipIf(process.platform === 'win32')('falls back to ~/.config/selora without XDG', () => {
     const dir = mkdtempSync(join(tmpdir(), 'selora-home-'));
     const prev = process.env['XDG_CONFIG_HOME'];
     const home = process.env['HOME'];

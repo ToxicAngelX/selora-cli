@@ -491,7 +491,8 @@ describe('git tools', () => {
       const res = await gitRestoreTool.run({ path: 'tracked.txt' }, ctx(root));
       expect(res.ok).toBe(true);
       expect(res.summary).toBe('restored tracked.txt (uncommitted changes discarded)');
-      expect(readFileSync(join(root, 'tracked.txt'), 'utf8')).toBe('original\n');
+      // Windows git checks out with CRLF (core.autocrlf) — normalize for compare
+      expect(readFileSync(join(root, 'tracked.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('original\n');
       expect((await gitRestoreTool.run({ path: '' }, ctx(root))).summary).toContain(
         'path must be a non-empty string',
       );
