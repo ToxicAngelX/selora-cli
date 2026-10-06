@@ -160,8 +160,10 @@ describe('read_file', () => {
       expect(past.ok).toBe(false);
       expect(past.summary).toContain('start_line 11 is past the end');
 
-      // outside: granted via ctx.outsideDirs (what an 'always' answer grants)
-      const home = mkdtempSync(join(tmpdir(), 'selora-outside-'));
+      // outside: granted via ctx.outsideDirs (what an 'always' answer grants).
+      // realpath: tmpdir may be a symlink (macOS) or a short name (Windows
+      // runners) — the grant must match the resolved path exactly.
+      const home = realpathSync(mkdtempSync(join(tmpdir(), 'selora-outside-')));
       try {
         mkdirSync(join(home, 'Desktop'), { recursive: true });
         writeFileSync(join(home, 'Desktop', 'n.txt'), 'far away\n', 'utf8');

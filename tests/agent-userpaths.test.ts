@@ -101,7 +101,9 @@ describe('resolveUserPath — inside the project root', () => {
 
   it('symlinks inside the root are real pathed — a link pointing OUT is outside, not followed', () => {
     if (process.platform === 'win32') return; // symlink creation needs privileges there
-    const outer = mkdtempSync(join(tmpdir(), 'selora-userpaths-'));
+    // macOS note: realpath the OUTER dir too — tmpdir may sit behind a symlink
+    // (/var → /private/var), and the expected paths below are built from it.
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), 'selora-userpaths-')));
     try {
       const root = join(outer, 'proj');
       const secret = join(outer, 'secret');
@@ -134,7 +136,8 @@ describe('resolveUserPath — inside the project root', () => {
 
 describe('resolveUserPath — outside the project root', () => {
   it('~, aliases, absolute paths, and .. climbs all resolve to realpathed OUTSIDE paths', () => {
-    const outer = mkdtempSync(join(tmpdir(), 'selora-userpaths-'));
+    // macOS note: realpath — tmpdir may sit behind a symlink (/var → /private/var).
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), 'selora-userpaths-')));
     try {
       const root = join(outer, 'proj');
       mkdirSync(root, { recursive: true });
