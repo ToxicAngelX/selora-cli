@@ -106,9 +106,9 @@ describe('chat agent — startup screen + tool round-trip', () => {
     expect(out).toContain('GLM 5.3 Flash');
     // plan fetch failed against the mock (404) — honest degradation
     expect(out).toContain('unknown');
-    // tips
+    // tips: the two pinned ones (the third rotates per launch)
     expect(out).toContain('/help for commands');
-    expect(out).toContain('Ctrl+C');
+    expect(out).toContain('/exit ends the session');
     // NO ANSI: the real stdout is not a TTY, so the theme is level 0
     expect(out).not.toContain('\x1b[');
     expect(cap.err()).not.toContain('\x1b[');

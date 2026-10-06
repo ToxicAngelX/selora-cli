@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-06
+
+### Added
+
+- **Per-character gradient logo with a twinkling starfield**: the startup
+  logo is now colored cell-by-cell (a horizontal gradient sweep with a slight
+  diagonal skew) instead of per line, and about a third of the stars render
+  bright on a rotating schedule.
+- **Animated startup reveal**: on a color-capable TTY the startup screen
+  plays a ~0.6s intro — the gradient sweeps across the logo while the stars
+  twinkle — landing exactly on the static frame. `SELORA_NO_ANIMATE` (any
+  value) opts out; it also skips automatically under NO_COLOR/TERM=dumb,
+  non-TTY streams, the `mono` theme, and terminals too short to redraw.
+- **`aurora` theme**: the cool sibling — emerald → teal → cyan → sky
+  (`selora theme aurora`, or `/theme aurora` in chat).
+- **Spinner shimmer**: the spinner word sweeps the theme gradient
+  (hue rotates as it spins), ten rotating phrases (up from six), and a
+  `ctrl+c to interrupt` hint on the status line.
+- **Rotating tips**: the startup screen shows the two pinned tips plus one
+  rotating tip picked per launch.
+
+### Fixed
+
+- `/theme <name>` in the chat REPL rebuilt the theme from the OLD palette —
+  colors never actually changed until restart. It now applies immediately.
+- The spinner kept the pre-switch theme after `/theme`; it now follows the
+  live theme.
+
 ## [0.3.0] - 2026-10-06
 
 The galaxy release: a Claude-Code-style terminal UI, and an agent that can

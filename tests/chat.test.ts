@@ -30,7 +30,8 @@ import {
   modelDetailBody,
 } from './mock/fixtures.js';
 import { cleanup, freshEnv, useApiUrl, type TempEnv } from './helpers/env.js';
-import { saveConfig } from '../src/config/index.js';
+import { loadConfig, saveConfig } from '../src/config/index.js';
+import { THEME_NAMES } from '../src/ui/theme.js';
 import { SeloraClient } from '../src/api/client.js';
 import { streamChat, type ChatMessage } from '../src/api/endpoints/chat.js';
 import { SeloraApiError } from '../src/api/errors.js';
@@ -679,5 +680,20 @@ describe('chat REPL', () => {
     const chatReq = server.requests.slice(before).find((r) => r.path === '/v1/chat/completions');
     expect((JSON.parse(chatReq!.body) as { model: string }).model).toBe('glm-5.3-flash');
     expect(text).toContain('Hello, world!');
+  });
+
+  it('/theme switches the live theme and persists it; invalid names list every theme', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    installChatRoutes([CHAT_STREAM_FULL]);
+    const { io, cap } = replIo(['/theme nebula', '/theme', '/theme nope', '/exit']);
+    await runChat(replCtx(io), {});
+    const text = cap.all();
+    expect(text).toContain('✓ Theme set to nebula');
+    expect(loadConfig().theme).toBe('nebula');
+    // the lists come from THEME_NAMES, not a hardcoded string
+    expect(text).toContain(`Current theme: nebula (available: ${THEME_NAMES.join(', ')})`);
+    expect(text).toContain(`✗ unknown theme "nope" — available: ${THEME_NAMES.join(', ')}`);
+    expect(process.exitCode).toBeUndefined();
+    saveConfig({ apiKey: FAKE_KEY_USER }); // leave no theme behind for later suites
   });
 });

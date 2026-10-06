@@ -23,7 +23,7 @@ export interface ConfigFile {
   apiUrl?: string;
   apiKey?: string;
   defaultModel?: string;
-  /** UI theme: 'galaxy' (default), 'nebula', or 'mono' (no colors). */
+  /** UI theme: 'galaxy' (default), 'nebula', 'aurora', or 'mono' (no colors). */
   theme?: string;
   /** v0.3: opt-in for the web tools (web_search/web_fetch talk to non-gateway hosts). */
   webTools?: boolean;

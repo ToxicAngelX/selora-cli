@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  AURORA_PALETTE,
   colorLevelFor,
   hexToRgb,
   isThemeName,
@@ -155,6 +156,17 @@ describe('Theme wrapping', () => {
     expect(themeFor(undefined, true, { COLORTERM: 'truecolor' }).palette.name).toBe('galaxy');
     expect(themeFor('bogus', true, { TERM: 'xterm-256color' }).palette.name).toBe('galaxy');
   });
+
+  it('aurora is a first-class palette: emerald → teal → cyan → sky', () => {
+    expect(paletteFor('aurora').name).toBe('aurora');
+    expect(AURORA_PALETTE.gradient).toEqual(['#34d399', '#2dd4bf', '#22d3ee', '#38bdf8']);
+    expect(isThemeName('aurora')).toBe(true);
+    // level 3 emits the exact truecolor escape; sampleGradient endpoints match
+    const t = new Theme(AURORA_PALETTE, 3);
+    expect(t.cyan('x')).toBe('\x1b[38;2;34;211;238mx\x1b[0m');
+    expect(sampleGradient(AURORA_PALETTE.gradient, 0)).toBe('#34d399');
+    expect(sampleGradient(AURORA_PALETTE.gradient, 1)).toBe('#38bdf8');
+  });
 });
 
 describe('selora theme command', () => {
@@ -219,7 +231,7 @@ describe('selora theme command', () => {
       const parsed = JSON.parse(cap.out.join('')) as { ok: boolean; theme: string };
       expect(parsed.ok).toBe(true);
       expect(parsed.theme).toBe('galaxy');
-      expect(THEME_NAMES).toEqual(['galaxy', 'nebula', 'mono']);
+      expect(THEME_NAMES).toEqual(['galaxy', 'nebula', 'aurora', 'mono']);
       expect(isThemeName('galaxy')).toBe(true);
       expect(isThemeName('nope')).toBe(false);
     } finally {

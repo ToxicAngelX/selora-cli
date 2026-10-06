@@ -14,7 +14,7 @@
  * here throws — a malformed hex degrades to the plain text.
  */
 
-export type ThemeName = 'galaxy' | 'nebula' | 'mono';
+export type ThemeName = 'galaxy' | 'nebula' | 'aurora' | 'mono';
 
 /** 0 = no color, 1 = basic 16, 2 = xterm 256, 3 = truecolor. */
 export type ColorLevel = 0 | 1 | 2 | 3;
@@ -36,7 +36,7 @@ export interface Palette {
   readonly gradient: readonly string[];
 }
 
-export const THEME_NAMES: readonly ThemeName[] = ['galaxy', 'nebula', 'mono'];
+export const THEME_NAMES: readonly ThemeName[] = ['galaxy', 'nebula', 'aurora', 'mono'];
 
 export const GALAXY_PALETTE: Palette = {
   name: 'galaxy',
@@ -67,6 +67,21 @@ export const NEBULA_PALETTE: Palette = {
   gradient: ['#ec4899', '#f472b6', '#fb923c', '#fbbf24'],
 };
 
+/** aurora — the cool sibling: emerald → teal → cyan → sky. */
+export const AURORA_PALETTE: Palette = {
+  name: 'aurora',
+  space: '#6b7280',
+  star: '#ecfdf5',
+  cyan: '#22d3ee',
+  indigo: '#38bdf8', // sky
+  violet: '#2dd4bf', // teal
+  magenta: '#34d399', // emerald
+  success: '#34d399',
+  warning: '#fbbf24',
+  error: '#fb7185',
+  gradient: ['#34d399', '#2dd4bf', '#22d3ee', '#38bdf8'],
+};
+
 /** mono — deliberately colorless; every wrap is the identity. */
 export const MONO_PALETTE: Palette = {
   name: 'mono',
@@ -84,11 +99,12 @@ export const MONO_PALETTE: Palette = {
 
 export function paletteFor(name: string | undefined): Palette {
   if (name === 'nebula') return NEBULA_PALETTE;
+  if (name === 'aurora') return AURORA_PALETTE;
   if (name === 'mono') return MONO_PALETTE;
   return GALAXY_PALETTE; // unknown/absent → galaxy (the default)
 }
 
-/** Is `name` one of the three real themes? */
+/** Is `name` one of the four real themes? */
 export function isThemeName(name: string): name is ThemeName {
   return (THEME_NAMES as readonly string[]).includes(name);
 }

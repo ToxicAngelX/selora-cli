@@ -7,11 +7,13 @@ writes, moves, and removes your files, runs commands, drives git, and
 searches the web, straight from the terminal. It is an independent codebase:
 no website or IDE required.
 
-v0.3 gives the CLI a **galaxy-themed terminal UI** (Claude-Code-style): a
-starfield logo and info box on startup, a `❯` prompt with a status footer,
+v0.3 gives the CLI a **galaxy-themed terminal UI** (Claude-Code-style): an
+animated starfield logo (per-character gradient sweep + twinkling stars) and
+info box on startup, a `❯` prompt with a status footer,
 streaming markdown rendering, `● / ⎿` tool-call display, colored diffs,
-a spinner, and an arrow-key permission menu — with three themes
-(`galaxy`, `nebula`, `mono`) and honest NO_COLOR/non-TTY/`--json` fallbacks.
+a shimmering spinner, and an arrow-key permission menu — with four themes
+(`galaxy`, `nebula`, `aurora`, `mono`) and honest NO_COLOR/non-TTY/`--json`
+fallbacks.
 Ask it things like _"create a folder called Projects on my desktop"_ and it
 does it, no shell required.
 
@@ -84,7 +86,7 @@ The key is validated against the API **before** anything is stored.
 | `selora run "<prompt>"`               | one-shot streaming completion with the agent tool loop (permissions gated)    | [run.md](docs/commands/run.md)               |
 | `selora sessions [list\|show\|rm]`    | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
 | `selora init`                         | write a project-local selora.json (model + agent context globs)               | [init.md](docs/commands/init.md)             |
-| `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, mono)                               | [theme.md](docs/commands/theme.md)           |
+| `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, aurora, mono)                       | [theme.md](docs/commands/theme.md)           |
 | `selora completion [bash\|zsh\|fish]` | print a shell completion script                                               | [completion.md](docs/commands/completion.md) |
 
 Global flags on every command: `--json` (machine-readable output only),
@@ -177,7 +179,7 @@ Global config (stored, mode 0600):
 | Windows  | `%APPDATA%\selora\config.json`                                             |
 
 Fields: `apiUrl`, `apiKey`, `defaultModel`, `theme` (`galaxy` |
-`nebula` | `mono`), `webTools` (boolean) — all optional; environment
+`nebula` | `aurora` | `mono`), `webTools` (boolean) — all optional; environment
 variables and flags override them.
 
 Project config: `selora init` writes a `selora.json` in the current directory

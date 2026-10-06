@@ -1,7 +1,8 @@
 /**
- * The galaxy spinner (v0.3): `✦ Warping… 12s · 1.4K tokens` on one stderr
- * line, redrawn in place every ~150 ms. Frames cycle ✦ ✧ ⋆ ˚ through the
- * theme's gradient; the word rotates every ~3.5s through a galaxy verb list;
+ * The galaxy spinner: `✦ Warping… 12s · 1.4K tokens · ctrl+c to interrupt`
+ * on one stderr line, redrawn in place every ~150 ms. Frames cycle ✦ ✧ ⋆ ˚;
+ * the word SHIMMERS — a per-character gradient whose hue rotates one char per
+ * frame (shimmerText) — and rotates every ~3.5s through a galaxy verb list;
  * elapsed seconds are honest (floor); the token count is whatever the
  * caller's tokenSource reports (previous turns only — never invented).
  *
@@ -11,7 +12,7 @@
  * is disabled — the frames and words are still characters, just uncolored.
  */
 
-import type { Theme } from './theme.js';
+import { sampleGradient, type Theme } from './theme.js';
 
 export const SPINNER_FRAMES: readonly string[] = ['✦', '✧', '⋆', '˚'];
 
@@ -22,9 +23,36 @@ export const SPINNER_WORDS: readonly string[] = [
   'Scanning the void…',
   'Aligning constellations…',
   'Reading stardust…',
+  'Consulting the ephemeris…',
+  'Riding the solar wind…',
+  'Polishing the telescope…',
+  'Triangulating pulsars…',
 ];
 
 const CLEAR_LINE = '\r\x1b[2K';
+
+/**
+ * Per-character gradient that rotates by `offset` chars per call — a hue
+ * shimmer sweeping across the word. Whitespace stays bare; identity when the
+ * theme is disabled. The rotation wraps (modulo), so a seam travels through
+ * the word — it reads as moving energy, which is the point.
+ */
+export function shimmerText(theme: Theme, text: string, offset: number): string {
+  if (theme.level === 0 || text === '') return text;
+  const chars = Array.from(text); // code points — never split a surrogate pair
+  if (chars.length === 0) return text;
+  let out = '';
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i]!;
+    if (ch.trim() === '') {
+      out += ch;
+      continue;
+    }
+    const t = chars.length <= 1 ? 0 : ((i + offset) % chars.length) / (chars.length - 1);
+    out += theme.wrap(sampleGradient(theme.palette.gradient, t), ch);
+  }
+  return out;
+}
 
 export interface SpinnerOptions {
   theme?: Theme | undefined;
@@ -94,11 +122,15 @@ export class Spinner {
     // The word changes ~every 24 frames (3.5s at 150ms).
     const word = this.words[Math.floor(this.frame / 24) % this.words.length]!;
     const elapsed = Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000));
-    const parts = [word, `${elapsed}s`];
     const tokens = this.tokenSource?.();
-    if (tokens !== undefined && tokens > 0) parts.push(`${tokens.toLocaleString('en-US')} tokens`);
-    const text = parts.join(' · ');
-    const line = t !== undefined ? `${t.violet(frameChar)} ${t.dim(text)}` : `${frameChar} ${text}`;
+    const meta =
+      tokens !== undefined && tokens > 0
+        ? `${elapsed}s · ${tokens.toLocaleString('en-US')} tokens · ctrl+c to interrupt`
+        : `${elapsed}s · ctrl+c to interrupt`;
+    const line =
+      t !== undefined
+        ? `${t.violet(frameChar)} ${shimmerText(t, word, this.frame)} ${t.dim(meta)}`
+        : `${frameChar} ${word} ${meta}`;
     this.io.write(`${CLEAR_LINE}${line}`);
     this.visible = true;
   }

@@ -23,6 +23,7 @@ import { runInit } from './commands/init.js';
 import { runRun } from './commands/run.js';
 import { runSessions } from './commands/sessions.js';
 import { runCompletion } from './commands/completion.js';
+import { THEME_NAMES } from './ui/theme.js';
 
 export function buildProgram(io: CliIo): Command {
   const program = new Command();
@@ -195,7 +196,7 @@ export function buildProgram(io: CliIo): Command {
 
   const themeCmd = program
     .command('theme [name]')
-    .description('show the UI theme, or set it (galaxy, nebula, mono)')
+    .description(`show the UI theme, or set it (${THEME_NAMES.join(', ')})`)
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')

@@ -3,8 +3,10 @@
  * (v0.3: Claude-Code-style, galaxy-themed).
  *
  * What changed in v0.3 (docs/commands/chat.md):
- *  - a startup screen (gradient logo + starfield + info box: version, model,
- *    cwd, plan, tips) — TTY only, never --json;
+ *  - a startup screen (per-character gradient logo + twinkling starfield +
+ *    info box: version, model, cwd, plan, tips) — TTY only, never --json.
+ *    On a color-capable TTY it plays as a sub-second animated sweep
+ *    (SELORA_NO_ANIMATE opts out; short terminals fall back to static);
  *  - every message runs the AGENT LOOP with the full toolset attached
  *    (permission-gated per call; --safe restricts to read-only tools, --yes
  *    auto-approves). One shared readline feeds both the prompt and the
@@ -53,8 +55,9 @@ import {
   type PermissionAsker,
 } from '../agent/permissions.js';
 import type { Tool } from '../agent/tool.js';
-import { Theme, themeFor, isThemeName, type ThemeName } from '../ui/theme.js';
-import { renderStartupScreen } from '../ui/logo.js';
+import { themeFor, isThemeName, THEME_NAMES, type ThemeName } from '../ui/theme.js';
+import { renderStartupFrames } from '../ui/logo.js';
+import { playFrames } from '../ui/animate.js';
 import { MarkdownStream } from '../ui/markdown.js';
 import { renderUnifiedDiff } from '../ui/diff.js';
 import { Spinner } from '../ui/spinner.js';
@@ -80,6 +83,12 @@ interface SessionModel {
   id: string;
   displayName: string;
 }
+
+/** Plain setTimeout-as-promise for the startup animation's frame cadence. */
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 /** Verifies a model id via the public /v1/models/:id route; 404 propagates. */
 async function verifyModel(client: SeloraClient, id: string): Promise<SessionModel> {
@@ -189,19 +198,31 @@ export async function runChat(
 
   // The galaxy theme. Color level keys off the REAL stdout (a captured test
   // io is "TTY" but a piped stdout is not — NO_COLOR/non-TTY stay plain).
+  // isThemeName guards the config value: an unknown stored name falls back to
+  // galaxy instead of needing an edit here for every new theme.
+  const configuredTheme = loadConfig().theme;
   let themeName: ThemeName =
-    loadConfig().theme === 'nebula' ? 'nebula' : loadConfig().theme === 'mono' ? 'mono' : 'galaxy';
+    configuredTheme !== undefined && isThemeName(configuredTheme) ? configuredTheme : 'galaxy';
   let theme = themeFor(themeName, process.stdout.isTTY === true);
 
   if (!ctx.json) {
     const plan = await fetchPlanLabel(client);
     const width = process.stdout.columns ?? 80;
-    for (const line of renderStartupScreen(
-      { version: VERSION, model: modelLabel(current), cwd: shortCwd(), plan },
-      theme,
-      { width },
-    )) {
-      r.line(line);
+    const info = { version: VERSION, model: modelLabel(current), cwd: shortCwd(), plan };
+    const frames = renderStartupFrames(info, theme, { width });
+    // Animation gates on the REAL stdout (a captured test io never animates),
+    // an enabled theme (level 0 covers NO_COLOR, TERM=dumb, mono, pipes), and
+    // enough rows to redraw without hitting the scroll-region top.
+    const animate =
+      process.stdout.isTTY === true &&
+      theme.level > 0 &&
+      process.env['SELORA_NO_ANIMATE'] === undefined &&
+      (process.stdout.rows ?? 24) >= frames[0]!.length + 2;
+    if (animate) {
+      await playFrames(frames, { write: ctx.io.writeOut, sleep });
+    } else {
+      // The final frame — the same pure output the animation lands on.
+      for (const line of frames[frames.length - 1]!) r.line(line);
     }
   }
 
@@ -301,10 +322,14 @@ export async function runChat(
   const renderDiff = (before: string, after: string): readonly string[] =>
     renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 });
 
-  const spinner = new Spinner(
-    { write: ctx.io.writeErr },
-    { theme, tokenSource: () => (sessionTokens > 0 ? sessionTokens : undefined) },
-  );
+  // Built per theme: /theme swaps the live theme object, and the spinner must
+  // follow it — a spinner constructed once would keep the pre-switch palette.
+  const makeSpinner = (): Spinner =>
+    new Spinner(
+      { write: ctx.io.writeErr },
+      { theme, tokenSource: () => (sessionTokens > 0 ? sessionTokens : undefined) },
+    );
+  let spinner = makeSpinner();
   // The spinner redraws a line in place — only meaningful on a real TTY.
   const spinnerAllowed = process.stderr.isTTY === true && !ctx.json;
 
@@ -333,7 +358,7 @@ export async function runChat(
       for (const cmd of [
         '/help — show this list',
         '/model [id] — show or switch the model (verified before switching)',
-        '/theme [name] — show or switch the UI theme (galaxy, nebula, mono)',
+        `/theme [name] — show or switch the UI theme (${THEME_NAMES.join(', ')})`,
         '/clear — clear the conversation history',
         '/tools — list the agent tools available this session',
         '/permissions — show what is auto-allowed this session',
@@ -380,15 +405,18 @@ export async function runChat(
     if (trimmed === '/theme' || trimmed.startsWith('/theme ')) {
       const arg = trimmed.slice('/theme'.length).trim();
       if (arg === '') {
-        r.bullet(`Current theme: ${themeName} (available: galaxy, nebula, mono)`);
+        r.bullet(`Current theme: ${themeName} (available: ${THEME_NAMES.join(', ')})`);
         continue;
       }
       if (!isThemeName(arg)) {
-        r.fail(`unknown theme "${arg}" — available: galaxy, nebula, mono`);
+        r.fail(`unknown theme "${arg}" — available: ${THEME_NAMES.join(', ')}`);
         continue;
       }
       themeName = arg;
-      theme = new Theme(theme.palette, theme.level);
+      theme = themeFor(arg, process.stdout.isTTY === true);
+      // The old spinner is never running here (slash commands are read at the
+      // prompt; the spinner only runs mid-turn) — safe to swap.
+      spinner = makeSpinner();
       saveConfig({ ...loadConfig(), theme: themeName });
       r.ok(`Theme set to ${themeName}`);
       continue;

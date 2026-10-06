@@ -25,9 +25,14 @@ Done — the folder is on your desktop.
 ## The v0.3 UI
 
 - **Startup screen** (interactive terminals only — never `--json`, never
-  non-TTY): the SELORA logo in the theme gradient, surrounded by a sparse
-  random starfield (different every launch), and a rounded box with the CLI
-  version, the current model, the working directory, your plan, and tips.
+  non-TTY): the SELORA logo in a per-character sweep of the theme gradient,
+  surrounded by a sparse twinkling starfield (different every launch), and a
+  rounded box with the CLI version, the current model, the working directory,
+  your plan, and tips (two pinned, one rotating per launch). On a
+  color-capable TTY the screen plays as a ~0.6s animation — the gradient
+  sweeps in while stars twinkle — landing exactly on the static frame. Set
+  `SELORA_NO_ANIMATE` (any value) to skip it; it also skips automatically on
+  NO_COLOR/TERM=dumb/non-TTY/`mono` and on terminals too short to redraw.
   Under 60 columns the block logo collapses to a compact one-liner.
 - **Prompt**: a dim status line (`model · cwd · permission mode · tokens`)
   above a gradient `❯` marker.
@@ -42,17 +47,19 @@ Done — the folder is on your desktop.
   a "No" may carry a typed reason that goes back to the model. Piped stdin
   keeps the line-based y/n/a/e box. `Esc` = No. Raw mode is held only while
   the menu is open.
-- **Spinner**: `✦ Warping… 12s · 1.4K tokens` while a reply streams
-  (galaxy frames + rotating words, real elapsed time, honest token counts —
-  never under NO_COLOR/non-TTY). Ctrl+C stops a reply cleanly.
+- **Spinner**: `✦ Warping… 12s · 1.4K tokens · ctrl+c to interrupt` while a
+  reply streams (galaxy frames + a shimmering gradient word rotating through
+  ten phrases, real elapsed time, honest token counts — never under
+  NO_COLOR/non-TTY). Ctrl+C stops a reply cleanly.
 - **Exit summary**: duration, requests, tokens, cost, files changed.
 
 ## Themes
 
-`selora theme galaxy|nebula|mono` (or `/theme <name>` in the REPL) picks the
-palette — saved in the global config. `mono` disables all theme colors.
-NO_COLOR, TERM=dumb, and non-TTY streams disable color regardless, and
-truecolor degrades honestly to 256/16-color terminals.
+`selora theme galaxy|nebula|aurora|mono` (or `/theme <name>` in the REPL)
+picks the palette — saved in the global config, and applied live (the spinner
+follows too). `mono` disables all theme colors. NO_COLOR, TERM=dumb, and
+non-TTY streams disable color regardless, and truecolor degrades honestly to
+256/16-color terminals.
 
 ## The agent
 

@@ -17,8 +17,10 @@ import { GALAXY_PALETTE, Theme } from '../src/ui/theme.js';
 import {
   compactLogoLine,
   logoLines,
+  renderStartupFrames,
   renderStartupScreen,
   starFieldCanvas,
+  STARTUP_FRAME_COUNT,
   type StartupInfo,
 } from '../src/ui/logo.js';
 
@@ -149,7 +151,7 @@ describe('renderStartupScreen', () => {
     }
   });
 
-  it('the logo rows carry the per-line gradient when color is on', () => {
+  it('the logo rows carry the per-character gradient when color is on', () => {
     const theme = new Theme(GALAXY_PALETTE, 3);
     const out = renderStartupScreen(INFO, theme, { width: 80, rng: seeded(6) });
     const band = out.slice(2, 7).join('\n');
@@ -216,5 +218,89 @@ describe('renderStartupScreen', () => {
     expect(text.includes('…')).toBe(true);
     expect(text.includes(long)).toBe(false);
     for (const line of out) expect(line.length <= 40).toBe(true);
+  });
+});
+
+describe('startup frames', () => {
+  it('default count is STARTUP_FRAME_COUNT; frames opt is honored and clamped', () => {
+    const theme = new Theme(GALAXY_PALETTE, 0);
+    expect(renderStartupFrames(INFO, theme, { width: 80, rng: seeded(1) }).length).toBe(
+      STARTUP_FRAME_COUNT,
+    );
+    expect(renderStartupFrames(INFO, theme, { width: 80, rng: seeded(1), frames: 3 }).length).toBe(
+      3,
+    );
+    expect(renderStartupFrames(INFO, theme, { width: 80, rng: seeded(1), frames: 99 }).length).toBe(
+      32,
+    );
+    expect(renderStartupFrames(INFO, theme, { width: 80, rng: seeded(1), frames: 0 }).length).toBe(
+      1,
+    );
+  });
+
+  it('every frame has the same row count (the in-place redraw invariant)', () => {
+    const theme = new Theme(GALAXY_PALETTE, 3);
+    const frames = renderStartupFrames(INFO, theme, { width: 80, rng: seeded(11) });
+    const counts = new Set(frames.map((f) => f.length));
+    expect(counts.size).toBe(1);
+  });
+
+  it('the final frame IS the static screen (same seed, byte for byte)', () => {
+    const theme = new Theme(GALAXY_PALETTE, 3);
+    const frames = renderStartupFrames(INFO, theme, { width: 80, rng: seeded(42) });
+    const staticScreen = renderStartupScreen(INFO, theme, { width: 80, rng: seeded(42) });
+    expect(frames[frames.length - 1]).toEqual(staticScreen);
+  });
+
+  it('layout is stable across frames — only colors move', () => {
+    const theme = new Theme(GALAXY_PALETTE, 3);
+    const frames = renderStartupFrames(INFO, theme, { width: 80, rng: seeded(13) });
+    const stripped = frames.map((f) => stripAnsi(f.join('\n')));
+    for (const s of stripped) expect(s).toBe(stripped[0]);
+  });
+
+  it('level 0: all frames are byte-identical and ANSI-free', () => {
+    const theme = new Theme(GALAXY_PALETTE, 0);
+    const frames = renderStartupFrames(INFO, theme, { width: 80, rng: seeded(17) });
+    for (const frame of frames) {
+      const text = frame.join('\n');
+      expect(text.includes('\x1b')).toBe(false);
+      expect(text).toBe(frames[0]!.join('\n'));
+    }
+  });
+
+  it('level 3: the sweep actually moves (first frame ≠ final frame)', () => {
+    const theme = new Theme(GALAXY_PALETTE, 3);
+    const frames = renderStartupFrames(INFO, theme, { width: 80, rng: seeded(19) });
+    expect(frames[0]!.join('\n')).not.toBe(frames[frames.length - 1]!.join('\n'));
+  });
+
+  it('stars never land on a logo glyph — in ANY frame', () => {
+    const theme = new Theme(GALAXY_PALETTE, 3);
+    const frames = renderStartupFrames(INFO, theme, { width: 80, rng: seeded(23) });
+    const logo = logoLines();
+    for (const frame of frames) {
+      const plain = stripAnsi(frame.join('\n')).split('\n');
+      for (let r = 0; r < logo.length; r += 1) {
+        const screenRow = plain[2 + r] ?? '';
+        expect(screenRow.split('█').length - 1).toBe(logo[r]!.split('█').length - 1);
+        for (const ch of screenRow) {
+          if (ch === ' ' || ch === '█') continue;
+          expect(ALLOWED_STARS.has(ch)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('no stripped line exceeds the width in any frame (80 and 60)', () => {
+    for (const width of [80, 60]) {
+      const frames = renderStartupFrames(INFO, new Theme(GALAXY_PALETTE, 3), {
+        width,
+        rng: seeded(29),
+      });
+      for (const frame of frames) {
+        for (const line of frame) expect(stripAnsi(line).length <= width).toBe(true);
+      }
+    }
   });
 });
