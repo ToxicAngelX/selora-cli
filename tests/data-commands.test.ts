@@ -353,6 +353,11 @@ describe('models', () => {
 describe('model', () => {
   it('no arg: shows the display-time fallback and how to change it (nothing written)', async () => {
     installRoutes();
+    // Order-independence: a shuffled run may execute the saving test first;
+    // isolate the default-model field without wiping the stored key.
+    const cfg = loadConfig();
+    delete cfg.defaultModel;
+    saveConfig(cfg);
     const { promise, cap } = run((c) => runModel(c, undefined, {}));
     await promise;
     expect(cap.all()).toContain('glm-5.3-flash');

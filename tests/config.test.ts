@@ -85,7 +85,9 @@ describe('config', () => {
     try {
       saveConfig({ apiUrl: 'http://x.test', apiKey: 'sk-gw-TESTabc' });
       const st = statSync(configPath());
-      expect(st.mode & 0o777).toBe(0o600);
+      // Windows fs.chmod can only toggle the read-only bit — 0600 is a POSIX
+      // guarantee; on win32 the round-trip below still runs.
+      if (process.platform !== 'win32') expect(st.mode & 0o777).toBe(0o600);
       expect(loadConfig()).toEqual({ apiUrl: 'http://x.test', apiKey: 'sk-gw-TESTabc' });
       // no leftover tmp files
       expect(readdirSync(join(xdg, 'selora'))).toEqual(['config.json']);

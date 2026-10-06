@@ -214,6 +214,9 @@ describe('whoami', () => {
 
   it('revoked key: passes the backend rotation hint through verbatim', async () => {
     server.setHandler(() => ({ status: 401, body: REVOKED_KEY_401 }));
+    // Self-sufficient: this test must not depend on a key saved by an earlier
+    // test (order-independence — vitest may shuffle on some platforms/CI).
+    saveConfig({ apiUrl: server.url, apiKey: FAKE_KEY_USER });
     const { io, cap } = capturedIo();
     process.exitCode = undefined;
     await runWhoami({
