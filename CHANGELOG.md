@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-06
+
+### Added
+
+- **Pinned ambient banner**: on a color-capable TTY the SELORA logo/starfield
+  is pinned to the top of the screen (a DECSTBM scroll region confines the
+  transcript below it) and keeps animating forever — a slow star twinkle plus
+  a very slow gradient drift, one redraw every 1.6s. `SELORA_NO_ANIMATE`,
+  NO_COLOR/TERM=dumb, the `mono` theme, non-TTY streams and short terminals
+  all fall back to the classic inline screen. Honest tradeoff: lines that
+  scroll out of the region are not kept in the terminal's scrollback.
+- **Permission modes with a status line**: the prompt now shows
+  `⏸ manual mode on · ? for shortcuts` (or the current mode). Three modes —
+  `manual` (every tool call asks), `acceptEdits` (reads and project file
+  edits run without asking; shell commands and outside-root access still
+  ask), `auto` (everything runs — except deletions, which always ask).
+  shift+tab cycles at the prompt; `--safe` shows a read-only `safe` display
+  mode; `--yes` starts in `auto`. `?` at the prompt lists the shortcuts.
+- **Spinner "Thinking…"**: while the model streams reasoning, the spinner
+  pins a shimmering `Thinking…` word instead of the rotating galaxy phrases.
+
+### Changed
+
+- **Thinking text is no longer printed**: reasoning deltas used to stream as
+  dim gray text on stderr (and visually duplicated across tool-call rounds).
+  The spinner carries the thinking state now; the reply itself is unchanged.
+- **The startup info box is gone**: version/model/cwd/plan duplicated what
+  the prompt's status lines already say. The startup screen is now the
+  logo/starfield plus the tips (two pinned, one rotating) — nothing else.
+  This also drops the startup `/v1/me` call, so chat starts faster.
+- **No more duplicated prompt status lines**: an empty Enter reprompts with
+  the bare `❯` marker instead of reprinting the whole status block.
+
+### Fixed
+
+- Queued empty lines (typed ahead while a reply streams or after an error)
+  no longer flood the screen with repeated `model · cwd · mode` status lines.
+
 ## [0.4.0] - 2026-10-06
 
 ### Added

@@ -79,6 +79,12 @@ export class Spinner {
   private frame = 0;
   private startedAt = 0;
   private visible = false;
+  /**
+   * A pinned word (v0.5: 'Thinking…' while reasoning deltas stream) —
+   * overrides the rotating word list. start() clears it, so each wait phase
+   * begins on the galaxy words again.
+   */
+  private fixedWord: string | undefined;
 
   constructor(io: SpinnerIo, opts: SpinnerOptions = {}) {
     this.io = io;
@@ -92,8 +98,15 @@ export class Spinner {
     return this.timer !== undefined;
   }
 
+  /** Pin a word (undefined returns to the rotating list). Redraws if running. */
+  setFixedWord(word: string | undefined): void {
+    this.fixedWord = word;
+    if (this.timer !== undefined) this.draw();
+  }
+
   start(): void {
     if (this.timer !== undefined) return;
+    this.fixedWord = undefined;
     this.startedAt = Date.now();
     this.frame = 0;
     this.draw();
@@ -119,8 +132,8 @@ export class Spinner {
   private draw(): void {
     const t = this.theme;
     const frameChar = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]!;
-    // The word changes ~every 24 frames (3.5s at 150ms).
-    const word = this.words[Math.floor(this.frame / 24) % this.words.length]!;
+    // The word changes ~every 24 frames (3.5s at 150ms) — unless pinned.
+    const word = this.fixedWord ?? this.words[Math.floor(this.frame / 24) % this.words.length]!;
     const elapsed = Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000));
     const tokens = this.tokenSource?.();
     const meta =

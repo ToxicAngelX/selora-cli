@@ -83,4 +83,30 @@ describe('Spinner', () => {
     expect(writes[writes.length - 1]!).toContain('42,100 tokens');
     again.stop();
   });
+
+  it('setFixedWord pins the word while running; start() clears the pin', () => {
+    const { io, writes } = recorder();
+    const spinner = new Spinner(io);
+    spinner.start();
+    expect(writes[writes.length - 1]!).toContain('Orbiting…');
+    spinner.setFixedWord('Thinking…');
+    // pinning while running redraws immediately with the fixed word
+    expect(writes[writes.length - 1]!).toContain('Thinking… 0s');
+    expect(writes[writes.length - 1]!).not.toContain('Orbiting…');
+    spinner.stop();
+    spinner.start();
+    // a fresh start is back on the rotating galaxy words
+    expect(writes[writes.length - 1]!).toContain('Orbiting…');
+    spinner.stop();
+  });
+
+  it('setFixedWord(undefined) returns to the rotating words', () => {
+    const { io, writes } = recorder();
+    const spinner = new Spinner(io);
+    spinner.start();
+    spinner.setFixedWord('Thinking…');
+    spinner.setFixedWord(undefined);
+    expect(writes[writes.length - 1]!).toContain('Orbiting…');
+    spinner.stop();
+  });
 });

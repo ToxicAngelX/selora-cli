@@ -475,8 +475,8 @@ describe('chat REPL', () => {
     expect(out).toContain('  Tokens: 6,055 · Cost: $0.018');
     expect(out).toContain('  Tokens: 150 · Cost: $0.001');
     expect(out).not.toContain('Tokens: 4,821');
-    // reasoning went to stderr, dim gray channel
-    expect(cap.err()).toContain('(thinking about it)');
+    // v0.5: reasoning is NEVER printed — the spinner carries the thinking
+    expect(cap.err()).not.toContain('(thinking about it)');
     // the gray prompt was written for each turn
     expect(cap.err().split('❯ ').length - 1).toBe(4);
     // model switch verified against /v1/models/:id
@@ -664,6 +664,47 @@ describe('chat REPL', () => {
     expect(text).toContain('Current model: glm-5.3-flash (GLM 5.3 Flash)');
     // 5 prompts were drawn (empty, /wat, /model, + none for /exit)
     expect(cap.err().split('❯ ').length - 1).toBeGreaterThanOrEqual(4);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('v0.5: an empty line reprompts BARE — the status lines are not duplicated', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    installChatRoutes([CHAT_STREAM_FULL]);
+    const { io, cap } = replIo(['', '', '/exit']);
+    await runChat(replCtx(io), {});
+    // Full prompt drawn once (before the first line); the two empty Enters
+    // reprompt with the bare ❯ marker only: the context line appears ONCE.
+    expect(cap.err().split('glm-5.3-flash · ').length - 1).toBe(1);
+    expect(cap.err().split('⏸ manual mode on').length - 1).toBe(1);
+    // …but all three ❯ markers were drawn (initial + two bare reprompts)
+    expect(cap.err().split('❯ ').length - 1).toBe(3);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('v0.5: ? at the prompt shows the shortcut list, not a chat turn', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    installChatRoutes([CHAT_STREAM_FULL]);
+    const before = server.requests.length;
+    const { io, cap } = replIo(['?', '/exit']);
+    await runChat(replCtx(io), {});
+    const text = cap.all();
+    expect(text).toContain('shift+tab — cycle the permission mode');
+    expect(text).toContain('Ctrl+C — stop the streaming reply');
+    // '?' is a shortcut, never a message to the model
+    expect(server.requests.slice(before).some((r) => r.path === '/v1/chat/completions')).toBe(
+      false,
+    );
+  });
+
+  it('v0.5: the mode line reflects the flags — --yes starts in auto, --safe shows safe', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    installChatRoutes([CHAT_STREAM_FULL]);
+    const yes = replIo(['/exit']);
+    await runChat(replCtx(yes.io), { yes: true });
+    expect(yes.cap.err()).toContain('⏵⏵ auto mode on · ? for shortcuts');
+    const safe = replIo(['/exit']);
+    await runChat(replCtx(safe.io), { safe: true });
+    expect(safe.cap.err()).toContain('⏸ safe mode on (read-only tools) · ? for shortcuts');
     expect(process.exitCode).toBeUndefined();
   });
 

@@ -94,21 +94,27 @@ function routeToolRounds(rounds: number): void {
 }
 
 describe('chat agent — startup screen + tool round-trip', () => {
-  it('the startup screen renders (logo + info box: version/model/cwd/plan), plain when color is off', async () => {
+  it('the startup screen renders (logo + starfield + tips, NO info box), plain when color is off', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     routeToolRounds(0);
     const { io, cap } = replIo(['/exit']);
     await runChat(ctx(io), {});
     const out = cap.out();
-    // the block logo (or compact line under 60 cols — the box is shared)
-    expect(out).toContain(VERSION);
-    expect(out).toContain('glm-5.3-flash');
-    expect(out).toContain('GLM 5.3 Flash');
-    // plan fetch failed against the mock (404) — honest degradation
-    expect(out).toContain('unknown');
+    // v0.5: the version/model/cwd/plan box is gone — the prompt's status
+    // lines carry that context now
+    expect(out).not.toContain(VERSION);
+    expect(out).not.toContain('unknown');
+    for (const gone of ['╭', '╰', '│', 'version', 'plan']) {
+      expect(out).not.toContain(gone);
+    }
+    // the block logo did render (width defaults to 80 off-TTY)
+    expect(out).toContain('█');
     // tips: the two pinned ones (the third rotates per launch)
     expect(out).toContain('/help for commands');
     expect(out).toContain('/exit ends the session');
+    // the prompt's status lines carry the model + the mode (on stderr)
+    expect(cap.err()).toContain('glm-5.3-flash · ');
+    expect(cap.err()).toContain('⏸ manual mode on · ? for shortcuts');
     // NO ANSI: the real stdout is not a TTY, so the theme is level 0
     expect(out).not.toContain('\x1b[');
     expect(cap.err()).not.toContain('\x1b[');
@@ -223,7 +229,7 @@ describe('chat agent — slash commands', () => {
     ]);
     await runChat(ctx(io), {});
     const text = cap.all();
-    expect(text).toContain('Tools (18, mode: ask): read_file');
+    expect(text).toContain('Tools (18, mode: manual): read_file');
     expect(text).toContain('Nothing auto-allowed yet');
     expect(text).toContain('Requests: 0');
     expect(text).toContain('✓ Theme set to nebula');

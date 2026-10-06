@@ -30,8 +30,11 @@ const CLEAR_LINE = '\x1b[2K';
  * so padding is plain spaces; trimming it is a visual no-op that avoids the
  * auto-wrap edge case (a padded row exactly `width` columns wide would wrap
  * and corrupt the cursor-up count). No control characters involved.
+ *
+ * Exported for the pinned banner's ambient redraw, which plays by the same
+ * never-wrap rule.
  */
-const trimEnd = (s: string): string => s.replace(/ +$/, '');
+export const trimEnd = (s: string): string => s.replace(/ +$/, '');
 
 /**
  * Play `frames` in place. Zero frames is a no-op; a single frame prints

@@ -6,6 +6,8 @@ galaxy-themed UI. `run`'s one-shot pipeline, but conversational.
 
 ```
 ✓ Connected to glm-5.3-flash (GLM 5.3 Flash)
+glm-5.3-flash · ~/project
+⏸ manual mode on · ? for shortcuts
 ❯ create a folder called Projects on my desktop
 ● CreateDir(desktop/Projects)
 ┌─ create_dir(desktop/Projects)
@@ -22,20 +24,39 @@ Done — the folder is on your desktop.
 ✓ Session ended
 ```
 
-## The v0.3 UI
+## The UI (v0.5)
 
 - **Startup screen** (interactive terminals only — never `--json`, never
   non-TTY): the SELORA logo in a per-character sweep of the theme gradient,
-  surrounded by a sparse twinkling starfield (different every launch), and a
-  rounded box with the CLI version, the current model, the working directory,
-  your plan, and tips (two pinned, one rotating per launch). On a
-  color-capable TTY the screen plays as a ~0.6s animation — the gradient
-  sweeps in while stars twinkle — landing exactly on the static frame. Set
-  `SELORA_NO_ANIMATE` (any value) to skip it; it also skips automatically on
-  NO_COLOR/TERM=dumb/non-TTY/`mono` and on terminals too short to redraw.
-  Under 60 columns the block logo collapses to a compact one-liner.
-- **Prompt**: a dim status line (`model · cwd · permission mode · tokens`)
-  above a gradient `❯` marker.
+  surrounded by a sparse twinkling starfield (different every launch), plus
+  tips (two pinned, one rotating per launch). The v0.4 info box
+  (version/model/cwd/plan) is gone — the prompt's status lines carry that
+  context. Set `SELORA_NO_ANIMATE` (any value) to skip the animation; it
+  also skips automatically on NO_COLOR/TERM=dumb/non-TTY/`mono` and on
+  terminals too short to redraw. Under 60 columns the block logo collapses
+  to a compact one-liner.
+- **Pinned ambient banner**: on a color-capable TTY with enough rows, the
+  logo/starfield is pinned to the TOP of the screen — the transcript scrolls
+  in a region below it (DECSTBM) while the banner keeps twinkling forever at
+  a slow ambient rate (one redraw every 1.6s: a rotating third of the stars
+  goes bright, and the gradient drifts a full cycle in about two minutes).
+  Honest tradeoff: lines that scroll out of the region are NOT added to the
+  terminal's scrollback. Opt out with `SELORA_NO_ANIMATE` (or `mono` /
+  NO_COLOR) for the classic inline screen that leaves scrollback intact.
+- **Prompt**: a dim context line (`model · cwd · tokens`), a dim mode line
+  (`⏸ manual mode on · ? for shortcuts`), and a gradient `❯` marker. An
+  empty Enter reprompts with the bare marker — the status lines print once
+  per real turn, never duplicated.
+- **Permission modes**: shift+tab at the prompt cycles `manual` (every tool
+  call asks) → `acceptEdits` (reads and project file edits run without
+  asking; shell commands and outside-root access still ask) → `auto` (every
+  tool runs — except deletions, which always ask, in every mode). `--safe`
+  pins a read-only `safe` display mode (write/exec tools don't exist, so
+  there is nothing to cycle); `--yes` starts in `auto`. `?` at the prompt
+  lists the shortcuts.
+- **Thinking**: reasoning deltas are never printed as text — while the model
+  thinks, the spinner shows a shimmering `✦ Thinking…`; the reply streams
+  live as soon as content starts.
 - **Replies** stream through the markdown renderer: completed lines render
   live; fenced code blocks render as dim boxed units with a language label
   once they close. Headings, bold, inline code, and bullets are styled.
@@ -67,9 +88,9 @@ Every message runs the same loop as `selora run`: the request carries the 18
 tool definitions; when the model actually requests tools on the wire, each
 call is permission-gated (dry-run preview → menu), executed, and its result
 feeds back. One readline drives both the prompt and the permission menu.
-`--safe` restricts the toolset to read-only tools; `--yes` auto-approves
-(then outside-root access is granted implicitly, in memory). Turn cap: the
-project `selora.json` `agent.maxTurns`, else 25. The permission memory
+`--safe` restricts the toolset to read-only tools; `--yes` starts the session
+in `auto` mode (every tool runs without asking — except deletions, which
+always ask). Turn cap: the project `selora.json` `agent.maxTurns`, else 25. The permission memory
 ("always this session", outside-root directory grants) lives in the session
 process only. See [docs/agent.md](../agent.md) for the full sandbox model.
 
@@ -95,14 +116,16 @@ command exits 1 with `You are not logged in. Run: selora login`.
 | `/model`        | show the current model                                                        |
 | `/model <id>`   | verify `<id>` via `/v1/models/:id`, then switch (404 keeps the current model) |
 | `/theme`        | show the current theme                                                        |
-| `/theme <name>` | switch (galaxy, nebula, mono) — saved to the global config                    |
+| `/theme <name>` | switch (galaxy, nebula, aurora, mono) — saved to the global config          |
 | `/clear`        | clear the conversation history                                                |
 | `/tools`        | list the tools available this session (and the permission mode)               |
 | `/permissions`  | show what is auto-allowed this session (memory-only state)                    |
 | `/cost`         | session totals: requests, tokens, cost                                        |
 | `/exit`         | end the session (Ctrl+D at the prompt also works)                             |
 
-Empty lines just re-prompt. Unknown slash commands print a hint.
+Empty lines re-prompt with the bare `❯` marker (the status lines print once
+per real turn). `?` at the prompt lists the keyboard shortcuts. Unknown slash
+commands print a hint.
 
 ## Per-reply footer
 

@@ -7,13 +7,15 @@ writes, moves, and removes your files, runs commands, drives git, and
 searches the web, straight from the terminal. It is an independent codebase:
 no website or IDE required.
 
-v0.3 gives the CLI a **galaxy-themed terminal UI** (Claude-Code-style): an
-animated starfield logo (per-character gradient sweep + twinkling stars) and
-info box on startup, a `❯` prompt with a status footer,
-streaming markdown rendering, `● / ⎿` tool-call display, colored diffs,
-a shimmering spinner, and an arrow-key permission menu — with four themes
-(`galaxy`, `nebula`, `aurora`, `mono`) and honest NO_COLOR/non-TTY/`--json`
-fallbacks.
+v0.5 gives the CLI a **galaxy-themed terminal UI** (Claude-Code-style): an
+animated starfield logo pinned at the top of the screen (per-character
+gradient sweep + a starfield that keeps twinkling at a slow ambient rate),
+a `❯` prompt with context and permission-mode status lines (shift+tab cycles
+manual → accept-edits → auto), streaming markdown rendering, `● / ⎿`
+tool-call display, colored diffs, a shimmering spinner (thinking is shown as
+an animation, never printed as text), and an arrow-key permission menu — with
+four themes (`galaxy`, `nebula`, `aurora`, `mono`) and honest
+NO_COLOR/non-TTY/`--json` fallbacks.
 Ask it things like _"create a folder called Projects on my desktop"_ and it
 does it, no shell required.
 
