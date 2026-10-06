@@ -71,6 +71,29 @@ Done — the folder is on your desktop.
   a "No" may carry a typed reason that goes back to the model. Piped stdin
   keeps the line-based y/n/a/e box. `Esc` = No. Raw mode is held only while
   the menu is open.
+- **Command menu (v0.7)**: typing `/` at the prompt opens an inline menu of
+  the slash commands right under the input line — `↑`/`↓` move the highlight,
+  more keystrokes filter it (prefix first, then substring, case-insensitive:
+  `/cl` narrows to `/clear`), `Tab`/`Enter` runs the highlighted command, and
+  `Esc` (or `Ctrl+C`) dismisses the menu and leaves the typed text alone, so
+  blind-typing a full command always works. An exact match + Enter runs the
+  typed command directly. The menu, `/help`, and dispatch share one command
+  registry — they cannot drift apart.
+- **`@` path completion (v0.7)**: the same engine completes file paths after
+  `@` — entries from the project root (or the typed subdirectory) filtered as
+  you type, directories offered with a trailing `/` (selecting one lists one
+  level deeper), image files highlighted, the listing capped at 12 rows with
+  a `+N more — keep typing` hint. `Tab`/`Enter` completes — completing an
+  already-complete path (the typed token IS the file) submits as usual, so a
+  fully typed path never eats an Enter — and paths with spaces are inserted
+  backslash-escaped so the image tokenizer reads them as one token.
+- **`/model` picker (v0.7)**: `/model` with no arguments lists the available
+  models as an arrow-key menu (current model pre-selected); Enter verifies
+  and switches exactly like `/model <id>`, Esc keeps the current model. On a
+  non-raw stdin it stays the plain current-model line.
+- All of the v0.7 menu machinery is **TTY-only**: piped stdin, `--json`,
+  NO_COLOR, and TERM=dumb never open a menu — typing full commands behaves
+  exactly as it always has.
 - **Spinner**: `✦ Warping… 12s · 1.4K tokens · ctrl+c to interrupt` while a
   reply streams (galaxy frames + a shimmering gradient word rotating through
   ten phrases, real elapsed time, honest token counts — never under
@@ -116,7 +139,8 @@ command exits 1 with `You are not logged in. Run: selora login`.
 
 Type `@<path>` in a message to attach a local image — or drag a file onto the
 terminal (both drag shapes work: `@"C:\my dir\a.png"` quoted and
-`@/tmp/my\ shot.png` backslash-escaped):
+`@/tmp/my\ shot.png` backslash-escaped). On a TTY, `@` also opens path
+completion as you type (v0.7 — see [The UI](#the-ui-v05)):
 
 ```
 ❯ what is in @screenshot.png compared to @mockup.webp
@@ -139,10 +163,13 @@ terminal (both drag shapes work: `@"C:\my dir\a.png"` quoted and
 
 ## Slash commands
 
+Type `/` at the prompt for the interactive menu (v0.7 — see above), or just
+type the command:
+
 | Command         | Effect                                                                        |
 | --------------- | ----------------------------------------------------------------------------- |
 | `/help`         | list the slash commands                                                       |
-| `/model`        | show the current model                                                        |
+| `/model`        | show the current model (on a TTY: the arrow-key model picker)                 |
 | `/model <id>`   | verify `<id>` via `/v1/models/:id`, then switch (404 keeps the current model) |
 | `/theme`        | show the current theme                                                        |
 | `/theme <name>` | switch (galaxy, nebula, aurora, mono) — saved to the global config            |
@@ -167,7 +194,9 @@ Sub-dime costs keep 3 decimals. No usage chunk → no footer.
 - **During a stream**: aborts the in-flight request, prints
   `· Request cancelled — session kept`, and returns to the prompt. The
   aborted turn is dropped from the history entirely (retry starts clean).
-- **At the prompt** (no stream in flight): exits the session cleanly.
+- **At the prompt** (no stream in flight): exits the session cleanly. If a
+  command/path menu is open, Ctrl+C only closes the menu (same as Esc) — the
+  next Ctrl+C exits.
 
 Failed turns (429 / 402 / network / in-band stream errors) are likewise
 dropped from history; the error is rendered (`✗ <backend message verbatim>`)

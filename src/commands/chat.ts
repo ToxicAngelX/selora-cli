@@ -1,6 +1,20 @@
 /**
  * `selora chat [--model <id>] [--safe] [--yes]` — the interactive agent REPL
- * (v0.6: crash-safe sessions, resume, image input).
+ * (v0.7: slash-command menu + @path completion at the prompt).
+ *
+ * What changed in v0.7 (docs/commands/chat.md):
+ *  - typing `/` opens an inline menu under the prompt: the slash commands with
+ *    their descriptions, ↑/↓ to move, Tab/Enter to run, Esc to dismiss — the
+ *    filter is prefix+substring fuzzy, and `/help`, the menu, and dispatch all
+ *    share ONE SlashCommand registry (they cannot drift apart);
+ *  - `@` gets the same engine for file paths: matching files/dirs from the
+ *    project root (dirs complete with a trailing `/` and deepen, image
+ *    extensions highlighted, capped at 12 rows + a "+N more" hint);
+ *  - `/model` with no args offers the model list as an arrow-key picker
+ *    (switching is verified exactly like `/model <id>`);
+ *  - mechanically: readline runs over a PassThrough "wire" and a PromptRouter
+ *    owns stdin while the prompt is active — TTY-only; non-TTY, --json,
+ *    NO_COLOR and TERM=dumb keep the v0.6 wiring and behavior verbatim.
  *
  * What changed in v0.6 (docs/commands/chat.md):
  *  - the conversation is NO LONGER in-memory only: after every COMPLETED turn
@@ -32,13 +46,13 @@
  */
 
 import * as readline from 'node:readline';
-import { Writable } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import type { CliContext } from '../context.js';
 import { loadConfig, resolveSettings, saveConfig } from '../config/index.js';
 import { loadProjectConfig } from '../config/project.js';
 import { SeloraClient } from '../api/client.js';
 import { SeloraApiError } from '../api/errors.js';
-import { getModel } from '../api/endpoints/models.js';
+import { getModel, listModels } from '../api/endpoints/models.js';
 import type { ChatMessage } from '../api/endpoints/chat.js';
 import { getStoredKey } from '../auth/storage.js';
 import { PromptClosedError } from '../auth/prompts.js';
@@ -86,6 +100,14 @@ import { MarkdownStream } from '../ui/markdown.js';
 import { renderUnifiedDiff } from '../ui/diff.js';
 import { Spinner } from '../ui/spinner.js';
 import { diffStyleFor, markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
+import {
+  PromptRouter,
+  pickFromList,
+  promptMenuCapable,
+  rawCapable,
+  slashHelpLine,
+  type SlashCommand,
+} from '../ui/promptmenu.js';
 
 export interface ChatFlags {
   model?: string | undefined;
@@ -353,7 +375,7 @@ export async function runChat(
     }
   }
 
-  // Persistent readline interface over stdin (the buffering pattern from
+  // Persistent readline interface (the buffering pattern from
   // auth/prompts.ts): lines queue while a turn is streaming, prompts go to
   // stderr, and readline's own echo is forwarded to raw stdout — except in
   // --json mode, where stdout carries ONLY reply text (echoed input would
@@ -364,11 +386,72 @@ export async function runChat(
       cb();
     },
   });
+
+  // v0.7: on a capable terminal the prompt gains the slash-command menu and
+  // the @path completion. readline then runs over a PassThrough "wire" and a
+  // PromptRouter owns the real stdin: menu keys (↑/↓/Tab/Enter/Esc while the
+  // menu is open) are consumed, every other byte is forwarded — readline's
+  // own keypress decoder, editing, echo, and history are untouched. The
+  // uncapable paths (non-TTY, --json, NO_COLOR, TERM=dumb, no raw mode) keep
+  // the v0.6 wiring verbatim: stdin straight into readline.
+  const menuOn = promptMenuCapable({
+    json: ctx.json,
+    stdinIsTTY: ctx.io.isTTY,
+    stdoutIsTTY: process.stdout.isTTY === true,
+    stdinRawCapable: rawCapable(ctx.io.stdin),
+    env: process.env,
+  });
+  const wire = menuOn ? new PassThrough() : null;
+  if (wire !== null) {
+    // readline toggles raw mode on ITS input (constructor/resume/close) —
+    // delegate to the real stdin so the terminal stays per-key, exactly like
+    // the direct wiring. (Without this the prompt would run in cooked mode.)
+    const stdinRaw = ctx.io.stdin as { setRawMode?(mode: boolean): void };
+    (wire as PassThrough & { setRawMode?: (mode: boolean) => void }).setRawMode = (
+      mode: boolean,
+    ) => {
+      try {
+        stdinRaw.setRawMode?.(mode);
+      } catch {
+        // best effort
+      }
+    };
+  }
+  /** True only while the REPL awaits a line at the prompt (shift+tab + menu gate). */
+  let promptActive = false;
+  /** Set once the permission mode exists (shift+tab handler for the router). */
+  const cycleModeRef: { fn: (() => void) | undefined } = { fn: undefined };
+  /** The slash-command registry — filled in below; the router reads it live. */
+  let slashCommands: readonly SlashCommand[] = [];
   const rl = readline.createInterface({
-    input: ctx.io.stdin,
+    input: wire ?? ctx.io.stdin,
     output: echo,
     terminal: ctx.io.isTTY,
   });
+  // The prompt readline repaints on line edits (a backspace redraws
+  // prompt+line — with readline's default '> ' the marker was clobbered).
+  // Same string drawPrompt writes, so a refresh is invisible.
+  rl.setPrompt(`${theme.gradient('❯')} `);
+
+  // The router attaches immediately: typed-ahead input during startup (the
+  // resume offer, model verification) must reach readline exactly like v0.6's
+  // direct wiring. The menu itself only opens while promptActive.
+  let router: PromptRouter | undefined;
+  if (wire !== null) {
+    router = new PromptRouter({
+      stdin: ctx.io.stdin,
+      rl,
+      wire,
+      isPromptActive: () => promptActive,
+      onShiftTab: () => cycleModeRef.fn?.(),
+      slashCommands: () => slashCommands,
+      cwd,
+      write: (s) => ctx.io.writeErr(s),
+      theme: () => theme,
+      cols: () => process.stdout.columns ?? 80,
+    });
+    router.attach();
+  }
 
   const queued: string[] = [];
   const waiters: Array<{ resolve: (line: string) => void; reject: (err: Error) => void }> = [];
@@ -443,6 +526,7 @@ export async function runChat(
     // plus the listing hint. The REPL is NOT started on a bad model.
     process.exitCode = 1;
     unpin();
+    router?.detach();
     rl.close();
     if (err instanceof SeloraApiError) {
       if (err.status === 404) {
@@ -471,8 +555,19 @@ export async function runChat(
   // auto (deletions still ask — neverAutoAllow is honored in every mode).
   const safeMode = flags.safe === true;
   let mode: PermissionMode = flags.yes === true ? 'auto' : 'manual';
-  /** True only while the REPL awaits a line at the prompt (shift+tab gate). */
-  let promptActive = false;
+
+  // The permission menu hands the line editor back in COOKED mode (its
+  // cleanup setRawMode(false)s after pausing readline) — re-assert raw mode
+  // so the prompt keeps per-key editing. (v0.6 left the REPL cooked after
+  // the first permission menu; the menu engine needs per-key delivery.)
+  const resumeInputRaw = (): void => {
+    rl.resume();
+    try {
+      (ctx.io.stdin as { setRawMode?(m: boolean): void }).setRawMode?.(true);
+    } catch {
+      // best effort — line input still works without raw mode
+    }
+  };
 
   // ONE permission asker for the whole session, sharing the REPL's line
   // queue (never a second 'line' listener — the menu pauses the editor and
@@ -489,7 +584,7 @@ export async function runChat(
           err: ctx.io.err,
           nextLine,
           pauseInput: () => rl.pause(),
-          resumeInput: () => rl.resume(),
+          resumeInput: menuOn ? resumeInputRaw : () => rl.resume(),
           rawWrite: ctx.io.writeErr,
           style: {
             marker: (s) => theme.cyan(s),
@@ -503,11 +598,11 @@ export async function runChat(
 
   // shift+tab (CSI Z, backtab) at the prompt cycles the permission mode.
   // Gated by promptActive: mid-turn and mid-menu the bytes belong elsewhere.
-  // Readline itself ignores the sequence (no completer cycles on it).
-  const onShiftTab = (chunk: Buffer | string): void => {
+  // With the menu engine the prompt router owns stdin and calls cycleMode
+  // (only while its menu is closed); the legacy path keeps the v0.6 stdin
+  // listener. Readline itself ignores the sequence (no completer cycles on it).
+  const cycleMode = (): void => {
     if (!promptActive) return;
-    const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-    if (s !== '\x1b[Z') return;
     mode = nextMode(mode);
     // Redraw the mode line in place — only while the input row has not
     // wrapped (a wrapped input sits more than one row below the mode line;
@@ -518,7 +613,13 @@ export async function runChat(
       ctx.io.writeErr(`\x1b7\x1b[1A\r\x1b[2K${theme.dim(modeStatusLine(mode))}\x1b8`);
     }
   };
-  if (!ctx.json && !safeMode) ctx.io.stdin.on('data', onShiftTab);
+  cycleModeRef.fn = !ctx.json && !safeMode ? cycleMode : undefined;
+  const onShiftTab = (chunk: Buffer | string): void => {
+    const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (s !== '\x1b[Z') return;
+    cycleMode();
+  };
+  if (!menuOn && !ctx.json && !safeMode) ctx.io.stdin.on('data', onShiftTab);
   const detachShiftTab = (): void => {
     ctx.io.stdin.removeListener('data', onShiftTab);
   };
@@ -603,6 +704,181 @@ export async function runChat(
     }
   }
 
+  // ------------------------------------------------------------------
+  // The slash-command registry (v0.7) — ONE source for /help, the prompt
+  // menu, and dispatch; the three cannot drift apart. run() returns 'exit'
+  // to end the session; anything else continues the REPL. Unknown input
+  // keeps the v0.6 message byte-for-byte.
+  // ------------------------------------------------------------------
+  const switchModel = async (arg: string): Promise<void> => {
+    try {
+      const next = await verifyModel(client, arg);
+      current = next;
+      r.ok(`Switched to ${current.id}`);
+    } catch (err) {
+      if (err instanceof SeloraApiError && err.status === 404) {
+        r.fail(err.apiMessage ?? err.message);
+        r.bullet('List available models with: selora models');
+      } else if (err instanceof SeloraApiError) {
+        r.fail(err.message);
+        if (err.hint !== undefined) r.bullet(err.hint);
+      } else {
+        r.fail('Model check failed.');
+      }
+      // Keep the current model on any failure.
+    }
+  };
+
+  // /model with no args: the arrow-key picker on a menu-capable TTY (the
+  // switch is verified exactly like `/model <id>`); the plain current-model
+  // line everywhere else — and as the fallback if the list cannot load.
+  const showOrPickModel = async (): Promise<void> => {
+    if (menuOn) {
+      try {
+        const models = await listModels(client);
+        if (models.length > 0) {
+          const at = models.findIndex((m) => m.id === current.id);
+          const picked = await pickFromList(
+            'Select a model (↑/↓ · Enter to switch · Esc keeps current)',
+            models.map((m) => ({
+              label: m.id,
+              hint: m.display_name === '' ? undefined : m.display_name,
+            })),
+            at === -1 ? 0 : at,
+            {
+              stdin: ctx.io.stdin,
+              write: ctx.io.writeErr,
+              pauseInput: () => rl.pause(),
+              resumeInput: resumeInputRaw,
+              theme,
+            },
+          );
+          if (picked !== null) {
+            await switchModel(models[picked]!.id);
+            return;
+          }
+        }
+      } catch {
+        // the picker is an enhancement — fall through to the plain line
+      }
+    }
+    r.bullet(`Current model: ${modelLabel(current)}`);
+  };
+
+  slashCommands = [
+    {
+      name: 'help',
+      description: 'show this list',
+      run: () => {
+        for (const cmd of slashCommands) r.bullet(slashHelpLine(cmd));
+        r.bullet('shift+tab — cycle the permission mode (manual → accept edits → auto)');
+        r.bullet('? — keyboard shortcuts');
+      },
+    },
+    {
+      name: 'model',
+      argsHint: '[id]',
+      description: 'show or switch the model (verified before switching)',
+      run: async (args) => {
+        if (args === '') await showOrPickModel();
+        else await switchModel(args);
+      },
+    },
+    {
+      name: 'theme',
+      argsHint: '[name]',
+      description: `show or switch the UI theme (${THEME_NAMES.join(', ')})`,
+      run: (args) => {
+        if (args === '') {
+          r.bullet(`Current theme: ${themeName} (available: ${THEME_NAMES.join(', ')})`);
+          return;
+        }
+        if (!isThemeName(args)) {
+          r.fail(`unknown theme "${args}" — available: ${THEME_NAMES.join(', ')}`);
+          return;
+        }
+        themeName = args;
+        theme = themeFor(args, process.stdout.isTTY === true);
+        // The old spinner is never running here (slash commands are read at the
+        // prompt; the spinner only runs mid-turn) — safe to swap.
+        spinner = makeSpinner();
+        // readline's repaint prompt follows the new theme too.
+        rl.setPrompt(`${theme.gradient('❯')} `);
+        saveConfig({ ...loadConfig(), theme: themeName });
+        r.ok(`Theme set to ${themeName}`);
+      },
+    },
+    {
+      name: 'clear',
+      description: 'clear the conversation history',
+      run: () => {
+        history.length = 0;
+        // Clear the saved session too — "clear" must not resurrect on resume.
+        persistSession();
+        r.bullet('History cleared.');
+      },
+    },
+    {
+      name: 'tools',
+      description: 'list the agent tools available this session',
+      run: () => {
+        r.bullet(
+          `Tools (${tools.length}, mode: ${safeMode ? 'safe' : mode}): ${tools.map((t) => t.name).join(', ')}`,
+        );
+      },
+    },
+    {
+      name: 'permissions',
+      description: 'show what is auto-allowed this session',
+      run: () => {
+        const dump = allows.dump();
+        if (dump.rules.length === 0 && dump.outsideDirs.length === 0) {
+          r.bullet('Nothing auto-allowed yet — every tool call asks first.');
+        } else {
+          for (const rule of dump.rules) r.bullet(`auto-allowed: ${rule}`);
+          for (const dir of dump.outsideDirs) r.bullet(`outside access: ${dir}`);
+        }
+        r.bullet('(memory-only — gone when the session ends)');
+      },
+    },
+    {
+      name: 'cost',
+      description: 'session totals (requests, tokens, cost)',
+      run: () => {
+        const parts = [
+          `Requests: ${formatCount(BigInt(sessionRequests))}`,
+          `Tokens: ${formatCount(BigInt(sessionTokens))}`,
+        ];
+        if (sessionCostMicro !== undefined && sessionCostMicro !== 0n) {
+          parts.push(`Cost: ${formatChatCost(microToWireString(sessionCostMicro))}`);
+        }
+        r.bullet(parts.join(' · '));
+      },
+    },
+    {
+      name: 'exit',
+      description: 'end the session (Ctrl+D also works)',
+      run: () => 'exit',
+    },
+  ];
+
+  /**
+   * Dispatch a `/...` line through the registry. Commands that take no args
+   * reject them ('/clear now' is unknown, as v0.6); /model and /theme take
+   * the remainder as args. Unknown commands keep the v0.6 hint verbatim.
+   */
+  const dispatchSlash = async (trimmed: string): Promise<'exit' | 'handled' | 'unknown'> => {
+    const head = trimmed.split(' ')[0]!;
+    const cmd = slashCommands.find((c) => `/${c.name}` === head);
+    const args = trimmed.slice(head.length).trim();
+    if (cmd === undefined || (args !== '' && cmd.argsHint === undefined)) {
+      r.bullet(`Unknown command ${head} — /help lists commands.`);
+      return 'unknown';
+    }
+    const outcome = await cmd.run(args);
+    return outcome === 'exit' ? 'exit' : 'handled';
+  };
+
   // fullPrompt: the status lines print once per real turn; an empty line
   // reprompts bare. promptActive gates the shift+tab mode cycling.
   let fullPrompt = true;
@@ -622,24 +898,6 @@ export async function runChat(
     const trimmed = line.trim();
     fullPrompt = trimmed !== '';
     if (trimmed === '') continue; // empty line → bare reprompt
-    if (trimmed === '/exit') break;
-    if (trimmed === '/help') {
-      for (const cmd of [
-        '/help — show this list',
-        '/model [id] — show or switch the model (verified before switching)',
-        `/theme [name] — show or switch the UI theme (${THEME_NAMES.join(', ')})`,
-        '/clear — clear the conversation history',
-        '/tools — list the agent tools available this session',
-        '/permissions — show what is auto-allowed this session',
-        '/cost — session totals (requests, tokens, cost)',
-        '/exit — end the session (Ctrl+D also works)',
-        'shift+tab — cycle the permission mode (manual → accept edits → auto)',
-        '? — keyboard shortcuts',
-      ]) {
-        r.bullet(cmd);
-      }
-      continue;
-    }
     if (trimmed === '?') {
       for (const cmd of [
         'shift+tab — cycle the permission mode (manual → accept edits → auto)',
@@ -652,86 +910,9 @@ export async function runChat(
       }
       continue;
     }
-    if (trimmed === '/cost') {
-      const parts = [
-        `Requests: ${formatCount(BigInt(sessionRequests))}`,
-        `Tokens: ${formatCount(BigInt(sessionTokens))}`,
-      ];
-      if (sessionCostMicro !== undefined && sessionCostMicro !== 0n) {
-        parts.push(`Cost: ${formatChatCost(microToWireString(sessionCostMicro))}`);
-      }
-      r.bullet(parts.join(' · '));
-      continue;
-    }
-    if (trimmed === '/tools') {
-      r.bullet(
-        `Tools (${tools.length}, mode: ${safeMode ? 'safe' : mode}): ${tools.map((t) => t.name).join(', ')}`,
-      );
-      continue;
-    }
-    if (trimmed === '/permissions') {
-      const dump = allows.dump();
-      if (dump.rules.length === 0 && dump.outsideDirs.length === 0) {
-        r.bullet('Nothing auto-allowed yet — every tool call asks first.');
-      } else {
-        for (const rule of dump.rules) r.bullet(`auto-allowed: ${rule}`);
-        for (const dir of dump.outsideDirs) r.bullet(`outside access: ${dir}`);
-      }
-      r.bullet('(memory-only — gone when the session ends)');
-      continue;
-    }
-    if (trimmed === '/clear') {
-      history.length = 0;
-      // Clear the saved session too — "clear" must not resurrect on resume.
-      persistSession();
-      r.bullet('History cleared.');
-      continue;
-    }
-    if (trimmed === '/theme' || trimmed.startsWith('/theme ')) {
-      const arg = trimmed.slice('/theme'.length).trim();
-      if (arg === '') {
-        r.bullet(`Current theme: ${themeName} (available: ${THEME_NAMES.join(', ')})`);
-        continue;
-      }
-      if (!isThemeName(arg)) {
-        r.fail(`unknown theme "${arg}" — available: ${THEME_NAMES.join(', ')}`);
-        continue;
-      }
-      themeName = arg;
-      theme = themeFor(arg, process.stdout.isTTY === true);
-      // The old spinner is never running here (slash commands are read at the
-      // prompt; the spinner only runs mid-turn) — safe to swap.
-      spinner = makeSpinner();
-      saveConfig({ ...loadConfig(), theme: themeName });
-      r.ok(`Theme set to ${themeName}`);
-      continue;
-    }
-    if (trimmed === '/model' || trimmed.startsWith('/model ')) {
-      const arg = trimmed.slice('/model'.length).trim();
-      if (arg === '') {
-        r.bullet(`Current model: ${modelLabel(current)}`);
-        continue;
-      }
-      try {
-        const next = await verifyModel(client, arg);
-        current = next;
-        r.ok(`Switched to ${current.id}`);
-      } catch (err) {
-        if (err instanceof SeloraApiError && err.status === 404) {
-          r.fail(err.apiMessage ?? err.message);
-          r.bullet('List available models with: selora models');
-        } else if (err instanceof SeloraApiError) {
-          r.fail(err.message);
-          if (err.hint !== undefined) r.bullet(err.hint);
-        } else {
-          r.fail('Model check failed.');
-        }
-        // Keep the current model on any failure.
-      }
-      continue;
-    }
     if (trimmed.startsWith('/')) {
-      r.bullet(`Unknown command ${trimmed.split(' ')[0]} — /help lists commands.`);
+      const outcome = await dispatchSlash(trimmed);
+      if (outcome === 'exit') break;
       continue;
     }
 
@@ -858,6 +1039,7 @@ export async function runChat(
         r.renderError(err);
         currentAbort = null;
         unpin();
+        router?.detach();
         detachShiftTab();
         rl.close();
         return;
@@ -876,6 +1058,7 @@ export async function runChat(
 
   spinner.stop();
   unpin();
+  router?.detach();
   detachShiftTab();
   rl.close();
 

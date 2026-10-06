@@ -23,6 +23,14 @@ every completed turn and offers to resume on the next launch
 Ctrl+C mid-run with the completed turns intact), and `@<path>` attaches
 images (png/jpg/webp/gif) to any chat or run message.
 
+v0.7 adds the **command palette**: typing `/` at the chat prompt opens an
+inline menu of the slash commands — arrow keys (or a few more keystrokes:
+the filter is fuzzy) pick one, Tab/Enter runs it, Esc dismisses. `@` gets the
+same treatment for file paths (dirs deepen with a trailing `/`, images are
+highlighted), and `/model` with no arguments becomes an arrow-key model
+picker. All of it is TTY-only — piped stdin, `--json`, and NO_COLOR behave
+exactly as before.
+
 Ask it things like _"create a folder called Projects on my desktop"_ and it
 does it, no shell required.
 

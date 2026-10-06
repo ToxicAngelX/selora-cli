@@ -111,7 +111,7 @@ function tokenize(input: string): Token[] {
 }
 
 /** True when the token text ends in a known image extension. */
-function hasImageExtension(token: string): boolean {
+export function isImagePath(token: string): boolean {
   return MIME_BY_EXT[extname(token).toLowerCase()] !== undefined;
 }
 
@@ -124,7 +124,7 @@ export function extractImageTokens(input: string): ExtractedImages {
   const paths: string[] = [];
   const kept: string[] = [];
   for (const t of tokens) {
-    if (t.marked && t.text !== '' && hasImageExtension(t.text)) {
+    if (t.marked && t.text !== '' && isImagePath(t.text)) {
       paths.push(t.text);
     } else {
       kept.push(t.marked ? `@${t.text}` : t.text);

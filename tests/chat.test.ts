@@ -698,6 +698,69 @@ describe('chat REPL', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('v0.7 registry: /help prints the exact v0.6 list, and every command dispatches identically', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    installChatRoutes([CHAT_STREAM_FULL]);
+    const { io, cap } = replIo([
+      '/help',
+      '/cost',
+      '/tools',
+      '/permissions',
+      '/clear',
+      '/exit now', // args on a no-arg command → unknown (v0.6 fall-through)
+      '/clear x', // same
+      '/exit',
+    ]);
+    await runChat(replCtx(io), { cwd: chatCwd() });
+    const text = cap.all();
+    // /help — the v0.6 list, line for line, in order
+    const helpLines = [
+      '/help — show this list',
+      '/model [id] — show or switch the model (verified before switching)',
+      `/theme [name] — show or switch the UI theme (${THEME_NAMES.join(', ')})`,
+      '/clear — clear the conversation history',
+      '/tools — list the agent tools available this session',
+      '/permissions — show what is auto-allowed this session',
+      '/cost — session totals (requests, tokens, cost)',
+      '/exit — end the session (Ctrl+D also works)',
+      'shift+tab — cycle the permission mode (manual → accept edits → auto)',
+      '? — keyboard shortcuts',
+    ];
+    let at = -1;
+    for (const line of helpLines) {
+      const idx = text.indexOf(`· ${line}`);
+      expect(idx).toBeGreaterThan(at);
+      at = idx;
+    }
+    // the read-only commands keep their exact outputs
+    expect(text).toContain('· Requests: 0 · Tokens: 0');
+    expect(text).toMatch(/· Tools \(\d+, mode: manual\): /);
+    expect(text).toContain('read_file');
+    expect(text).toContain('· Nothing auto-allowed yet — every tool call asks first.');
+    expect(text).toContain('· (memory-only — gone when the session ends)');
+    expect(text).toContain('· History cleared.');
+    // args where none belong → the v0.6 unknown-command message
+    expect(text).toContain('· Unknown command /exit — /help lists commands.');
+    expect(text).toContain('· Unknown command /clear — /help lists commands.');
+    expect(text).toContain('✓ Session ended');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('v0.7 registry: /theme and /model keep their exact behaviors through the registry', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    installChatRoutes([CHAT_STREAM_FULL]);
+    const { io, cap } = replIo(['/theme aurora', '/theme', 'hi', '/model', '/exit']);
+    await runChat(replCtx(io), { cwd: chatCwd() });
+    const text = cap.all();
+    expect(text).toContain('✓ Theme set to aurora');
+    expect(text).toContain(`Current theme: aurora (available: ${THEME_NAMES.join(', ')})`);
+    // /model with no arg on a non-raw stdin keeps the plain current-model line
+    expect(text).toContain('Current model: glm-5.3-flash (GLM 5.3 Flash)');
+    expect(text).toContain('Hello, world!');
+    expect(process.exitCode).toBeUndefined();
+    saveConfig({ apiKey: FAKE_KEY_USER }); // leave no theme behind for later suites
+  });
+
   it('v0.5: ? at the prompt shows the shortcut list, not a chat turn', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);

@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-06
+
+The command palette. No new runtime dependencies (still exactly `commander` +
+`picocolors`).
+
+### Added
+
+- **Slash-command menu in chat**: typing `/` at the prompt opens an inline
+  menu under the input line listing the slash commands with their
+  descriptions, rendered in the active theme. `↑`/`↓` move the highlight,
+  typing filters (prefix first, then substring, case-insensitive), `Tab` or
+  `Enter` runs the highlighted command, `Esc` or `Ctrl+C` closes the menu and
+  leaves the typed text untouched. An exact match + Enter runs the typed
+  command directly.
+- **`@` path completion**: after `@`, the same engine lists matching
+  files/dirs from the project root — prefix+substring fuzzy, directories
+  offered with a trailing `/` that completes one level deeper, image
+  extensions highlighted, capped at 12 rows with a `+N more — keep typing`
+  hint. Completions with spaces are inserted backslash-escaped so the image
+  tokenizer reads them as one token.
+- **`/model` picker**: `/model` with no arguments lists the available models
+  as an arrow-key menu (current model pre-selected); Enter verifies and
+  switches exactly like `/model <id>`, Esc keeps the current model.
+- The menu, `/help`, and command dispatch now share **one slash-command
+  registry** — the three cannot drift apart. Every command's output is
+  byte-identical to v0.6.
+
+### Fixed
+
+- The prompt marker no longer turns into readline's default `> ` on the first
+  backspace/edit (readline now knows the real prompt string, so its repaints
+  redraw `❯ `).
+- After a permission menu, the prompt returns to raw mode — per-key editing
+  and history (arrow keys) kept degrading to cooked mode until the next
+  permission prompt.
+
+### Notes
+
+- The menu machinery is TTY-only: piped stdin, `--json`, NO_COLOR, TERM=dumb,
+  and raw-incapable stdin behave exactly as v0.6 (typing full commands always
+  works). The menu also stays out of the way while a reply streams and while
+  the permission menu or `/model` picker owns the keyboard.
+
 ## [0.6.0] - 2026-10-06
 
 Crash-safe conversations and image input. No new runtime dependencies (still
