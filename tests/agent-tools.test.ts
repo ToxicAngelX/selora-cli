@@ -8,7 +8,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -102,20 +110,74 @@ describe('read_file', () => {
     }
   });
 
-  it('untrusted input shapes: non-object, missing path, bad max_lines, .. escape', async () => {
+  it('untrusted input shapes: non-object, missing path, bad max_lines/start_line, outside root', async () => {
     const root = tempRoot();
     try {
-      expect((await readFileTool.run('a.txt', ctx(root))).summary).toContain('input must be an object');
-      expect((await readFileTool.run({}, ctx(root))).summary).toContain('missing required field "path"');
-      expect((await readFileTool.run({ path: 'a.txt', max_lines: 0 }, ctx(root))).summary).toContain(
-        'max_lines must be an integer between 1 and 10000',
+      expect((await readFileTool.run('a.txt', ctx(root))).summary).toContain(
+        'input must be an object',
       );
-      expect((await readFileTool.run({ path: 'a.txt', max_lines: 'ten' }, ctx(root))).summary).toContain(
-        'max_lines must be an integer between 1 and 10000',
+      expect((await readFileTool.run({}, ctx(root))).summary).toContain(
+        'missing required field "path"',
       );
-      expect((await readFileTool.run({ path: '../escape.txt' }, ctx(root))).summary).toContain(
-        'escapes the project root',
+      expect(
+        (await readFileTool.run({ path: 'a.txt', max_lines: 0 }, ctx(root))).summary,
+      ).toContain('max_lines must be an integer between 1 and 10000');
+      expect(
+        (await readFileTool.run({ path: 'a.txt', max_lines: 'ten' }, ctx(root))).summary,
+      ).toContain('max_lines must be an integer between 1 and 10000');
+      expect(
+        (await readFileTool.run({ path: 'a.txt', start_line: 0 }, ctx(root))).summary,
+      ).toContain('start_line must be an integer between 1 and 10000');
+      // v0.3: an escape is no longer a hard refusal — it is an OUTSIDE path
+      // that needs permission (dry run reports it; a real ungranted run fails).
+      const esc = await readFileTool.run({ path: '../escape.txt' }, ctx(root, true));
+      expect(esc.ok).toBe(true);
+      expect(esc.outside).toEqual({ abs: expect.any(String) });
+      expect(esc.preview).toContain('outside the project root');
+      const escReal = await readFileTool.run({ path: '../escape.txt' }, ctx(root));
+      expect(escReal.ok).toBe(false);
+      expect(escReal.summary).toContain('outside the project root and access was not granted');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v0.3: start_line reads a range; an outside path granted via outsideDirs reads for real', async () => {
+    const root = tempRoot();
+    try {
+      const text = Array.from({ length: 10 }, (_, i) => `line${i + 1}`).join('\n');
+      writeFileSync(join(root, 'r.txt'), `${text}\n`, 'utf8');
+      const ranged = await readFileTool.run(
+        { path: 'r.txt', start_line: 4, max_lines: 3 },
+        ctx(root),
       );
+      expect(ranged.ok).toBe(true);
+      expect(ranged.content).toBe(
+        'line4\nline5\nline6\n(… 4 more lines — pass max_lines to read more)',
+      );
+      expect(ranged.summary).toContain('lines 4-6 of 10');
+      const past = await readFileTool.run({ path: 'r.txt', start_line: 11 }, ctx(root));
+      expect(past.ok).toBe(false);
+      expect(past.summary).toContain('start_line 11 is past the end');
+
+      // outside: granted via ctx.outsideDirs (what an 'always' answer grants)
+      const home = mkdtempSync(join(tmpdir(), 'selora-outside-'));
+      try {
+        mkdirSync(join(home, 'Desktop'), { recursive: true });
+        writeFileSync(join(home, 'Desktop', 'n.txt'), 'far away\n', 'utf8');
+        const granted = {
+          cwd: root,
+          dryRun: false,
+          outsideDirs: [join(home, 'Desktop')],
+        };
+        const res = await readFileTool.run({ path: join(home, 'Desktop', 'n.txt') }, granted);
+        expect(res.ok).toBe(true);
+        expect(res.content).toBe('far away\n');
+        expect(res.summary).toContain('read ');
+        expect(res.summary).toContain('n.txt');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -140,7 +202,10 @@ describe('write_file', () => {
       expect(dry.preview).toContain('export {}');
       expect(existsSync(join(root, 'src'))).toBe(false); // dry run created nothing
 
-      const res = await writeFileTool.run({ path: 'src/new/mod.ts', content: 'export {}\n' }, ctx(root));
+      const res = await writeFileTool.run(
+        { path: 'src/new/mod.ts', content: 'export {}\n' },
+        ctx(root),
+      );
       expect(res.ok).toBe(true);
       expect(res.summary).toBe('wrote src/new/mod.ts (10 B)');
       expect(readFileSync(join(root, 'src', 'new', 'mod.ts'), 'utf8')).toBe('export {}\n');
@@ -170,12 +235,16 @@ describe('write_file', () => {
       expect((await writeFileTool.run({ content: 'x' }, ctx(root))).summary).toContain(
         'missing required field "path"',
       );
-      expect((await writeFileTool.run({ path: 'f.txt', content: 42 }, ctx(root))).summary).toContain(
-        'content must be a string',
-      );
-      expect((await writeFileTool.run({ path: '../out.txt', content: 'x' }, ctx(root))).summary).toContain(
-        'escapes the project root',
-      );
+      expect(
+        (await writeFileTool.run({ path: 'f.txt', content: 42 }, ctx(root))).summary,
+      ).toContain('content must be a string');
+      // v0.3: an escape is an outside path needing permission, not a refusal
+      const esc = await writeFileTool.run({ path: '../out.txt', content: 'x' }, ctx(root, true));
+      expect(esc.ok).toBe(true);
+      expect(esc.outside).toEqual({ abs: expect.any(String) });
+      const escReal = await writeFileTool.run({ path: '../out.txt', content: 'x' }, ctx(root));
+      expect(escReal.ok).toBe(false);
+      expect(escReal.summary).toContain('outside the project root and access was not granted');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -221,15 +290,45 @@ describe('edit_file', () => {
       const nf = await editFileTool.run({ path: 'e.ts', find: 'absent', replace: 'x' }, ctx(root));
       expect(nf.ok).toBe(false);
       expect(nf.summary).toContain('find text not found in e.ts (file has 2 lines)');
-      expect((await editFileTool.run({ path: 'e.ts', find: '', replace: 'x' }, ctx(root))).summary).toContain(
-        'find must not be empty',
-      );
+      expect(
+        (await editFileTool.run({ path: 'e.ts', find: '', replace: 'x' }, ctx(root))).summary,
+      ).toContain('find must not be empty');
       expect((await editFileTool.run({ path: 'e.ts', find: 'h' }, ctx(root))).summary).toContain(
         'missing required field "replace"',
       );
-      expect((await editFileTool.run({ path: 'nope.txt', find: 'a', replace: 'b' }, ctx(root))).summary).toContain(
-        'no such file: nope.txt',
+      expect(
+        (await editFileTool.run({ path: 'nope.txt', find: 'a', replace: 'b' }, ctx(root))).summary,
+      ).toContain('no such file: nope.txt');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v0.3: an AMBIGUOUS find is refused with the occurrence count; dry run carries the diff', async () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, 'amb.ts'), 'x = 1;\nx = 1;\n', 'utf8');
+      const amb = await editFileTool.run(
+        { path: 'amb.ts', find: 'x = 1;', replace: 'x = 2;' },
+        ctx(root),
       );
+      expect(amb.ok).toBe(false);
+      expect(amb.summary).toContain('matches 2 times in amb.ts');
+      expect(amb.summary).toContain('exactly once');
+      // the file is untouched by the refusal
+      expect(readFileSync(join(root, 'amb.ts'), 'utf8')).toBe('x = 1;\nx = 1;\n');
+
+      // a unique edit's dry run carries before/after for the colored diff
+      writeFileSync(join(root, 'u.ts'), 'one\ntwo\nthree\n', 'utf8');
+      const dry = await editFileTool.run(
+        { path: 'u.ts', find: 'two', replace: 'TWO' },
+        ctx(root, true),
+      );
+      expect(dry.ok).toBe(true);
+      expect(dry.diff).toEqual({ before: 'one\ntwo\nthree\n', after: 'one\nTWO\nthree\n' });
+      const real = await editFileTool.run({ path: 'u.ts', find: 'two', replace: 'TWO' }, ctx(root));
+      expect(real.diff?.after).toBe('one\nTWO\nthree\n');
+      expect(readFileSync(join(root, 'u.ts'), 'utf8')).toBe('one\nTWO\nthree\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -242,7 +341,10 @@ describe('edit_file', () => {
 
 describe('tokenizeCommand', () => {
   it('splits words, honors single and double quotes and backslash escapes', () => {
-    expect(tokenizeCommand('echo hello world')).toEqual({ ok: true, argv: ['echo', 'hello', 'world'] });
+    expect(tokenizeCommand('echo hello world')).toEqual({
+      ok: true,
+      argv: ['echo', 'hello', 'world'],
+    });
     expect(tokenizeCommand("echo 'two words'")).toEqual({ ok: true, argv: ['echo', 'two words'] });
     expect(tokenizeCommand('git commit -m "a message"')).toEqual({
       ok: true,
@@ -254,7 +356,7 @@ describe('tokenizeCommand', () => {
   });
 
   it('unbalanced quotes are refused — no shell ever sees them', () => {
-    expect(tokenizeCommand("echo 'oops")).toEqual({ ok: false, error: "unbalanced single quote" });
+    expect(tokenizeCommand("echo 'oops")).toEqual({ ok: false, error: 'unbalanced single quote' });
     expect(tokenizeCommand('echo "oops')).toEqual({ ok: false, error: 'unbalanced double quote' });
   });
 
@@ -330,10 +432,7 @@ describe.skipIf(process.platform === 'win32')('run_command (POSIX)', () => {
   it('timeout kills the process and reports it honestly', async () => {
     const root = tempRoot();
     try {
-      const res = await runCommandTool.run(
-        { command: 'sleep 30', timeout_ms: 1000 },
-        ctx(root),
-      );
+      const res = await runCommandTool.run({ command: 'sleep 30', timeout_ms: 1000 }, ctx(root));
       expect(res.ok).toBe(false);
       expect(res.summary).toContain('timed out after 1s: sleep 30');
     } finally {
@@ -348,7 +447,9 @@ describe.skipIf(process.platform === 'win32')('run_command (POSIX)', () => {
       expect(dry.ok).toBe(true);
       expect(dry.summary).toBe('would run: echo hi');
       expect(dry.preview).toContain('timeout: 60s');
-      expect((await runCommandTool.run({}, ctx(root))).summary).toContain('missing required field "command"');
+      expect((await runCommandTool.run({}, ctx(root))).summary).toContain(
+        'missing required field "command"',
+      );
       expect((await runCommandTool.run({ command: '   ' }, ctx(root))).summary).toContain(
         'command must be a non-empty string',
       );
@@ -476,9 +577,9 @@ describe('git tools', () => {
       expect((await gitCommitTool.run({ message: '' }, ctx(root))).summary).toContain(
         'message must be a non-empty string',
       );
-      expect((await gitCommitTool.run({ message: 'x', files: ['a', 42] }, ctx(root))).summary).toContain(
-        'files must be an array of non-empty path strings',
-      );
+      expect(
+        (await gitCommitTool.run({ message: 'x', files: ['a', 42] }, ctx(root))).summary,
+      ).toContain('files must be an array of non-empty path strings');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -492,7 +593,9 @@ describe('git tools', () => {
       expect(res.ok).toBe(true);
       expect(res.summary).toBe('restored tracked.txt (uncommitted changes discarded)');
       // Windows git checks out with CRLF (core.autocrlf) — normalize for compare
-      expect(readFileSync(join(root, 'tracked.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('original\n');
+      expect(readFileSync(join(root, 'tracked.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe(
+        'original\n',
+      );
       expect((await gitRestoreTool.run({ path: '' }, ctx(root))).summary).toContain(
         'path must be a non-empty string',
       );
@@ -547,7 +650,9 @@ describe('glob tool', () => {
 
       const dry = await globTool.run({ pattern: '*.ts' }, ctx(root, true));
       expect(dry.summary).toBe('would find files matching *.ts under .');
-      expect((await globTool.run({}, ctx(root))).summary).toContain('pattern must be a non-empty string');
+      expect((await globTool.run({}, ctx(root))).summary).toContain(
+        'pattern must be a non-empty string',
+      );
       expect((await globTool.run({ pattern: 'x', path: '../out' }, ctx(root))).summary).toContain(
         'escapes the project root',
       );

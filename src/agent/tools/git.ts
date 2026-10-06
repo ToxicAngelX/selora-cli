@@ -189,7 +189,11 @@ export const gitCommitTool: Tool = {
   run: async (input, ctx) => {
     const r = rec(input);
     if (r === null) return badShape('git_commit: input must be an object');
-    if (!Object.hasOwn(r, 'message') || typeof r['message'] !== 'string' || r['message'].trim() === '') {
+    if (
+      !Object.hasOwn(r, 'message') ||
+      typeof r['message'] !== 'string' ||
+      r['message'].trim() === ''
+    ) {
       return badShape('git_commit: message must be a non-empty string');
     }
     const message = (r['message'] as string).trim();

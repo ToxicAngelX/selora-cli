@@ -32,7 +32,9 @@ function badShape(message: string): ToolResult {
 }
 
 /** Split a POSIX-style command string into argv (quote-aware, no shell). */
-export function tokenizeCommand(command: string): { ok: true; argv: string[] } | { ok: false; error: string } {
+export function tokenizeCommand(
+  command: string,
+): { ok: true; argv: string[] } | { ok: false; error: string } {
   const argv: string[] = [];
   let cur = '';
   let hasCur = false;
@@ -72,7 +74,8 @@ export function tokenizeCommand(command: string): { ok: true; argv: string[] } |
         hasCur = true;
         i += 1;
       }
-      if (!closed) return { ok: false, error: `unbalanced ${quote === "'" ? 'single' : 'double'} quote` };
+      if (!closed)
+        return { ok: false, error: `unbalanced ${quote === "'" ? 'single' : 'double'} quote` };
       continue;
     }
     if (c === '\\' && i + 1 < command.length) {
@@ -117,7 +120,8 @@ export const runCommandTool: Tool = {
   run: async (input, ctx) => {
     const r = rec(input);
     if (r === null) return badShape('run_command: input must be an object');
-    if (!Object.hasOwn(r, 'command')) return badShape('run_command: missing required field "command"');
+    if (!Object.hasOwn(r, 'command'))
+      return badShape('run_command: missing required field "command"');
     if (typeof r['command'] !== 'string' || r['command'].trim() === '') {
       return badShape('run_command: command must be a non-empty string');
     }
@@ -126,7 +130,9 @@ export const runCommandTool: Tool = {
     if (Object.hasOwn(r, 'timeout_ms')) {
       const v = r['timeout_ms'];
       if (typeof v !== 'number' || !Number.isInteger(v) || v < 1000 || v > MAX_TIMEOUT_MS) {
-        return badShape(`run_command: timeout_ms must be an integer between 1000 and ${MAX_TIMEOUT_MS}`);
+        return badShape(
+          `run_command: timeout_ms must be an integer between 1000 and ${MAX_TIMEOUT_MS}`,
+        );
       }
       timeoutMs = v;
     }
@@ -224,7 +230,9 @@ async function execCapture(a: ExecCaptureArgs): Promise<ToolResult> {
     });
     child.on('close', (code: number | null) => {
       if (timedOut) {
-        finish(badShape(`run_command: timed out after ${Math.round(a.timeoutMs / 1000)}s: ${a.display}`));
+        finish(
+          badShape(`run_command: timed out after ${Math.round(a.timeoutMs / 1000)}s: ${a.display}`),
+        );
         return;
       }
       const parts: string[] = [];
@@ -239,8 +247,7 @@ async function execCapture(a: ExecCaptureArgs): Promise<ToolResult> {
         });
       }
       // Non-zero exit is a REAL result, not a tool crash — the model sees it.
-      const reason =
-        code !== null ? `exit code ${code}` : 'terminated without an exit code';
+      const reason = code !== null ? `exit code ${code}` : 'terminated without an exit code';
       finish({
         ok: false,
         summary: `command failed (${reason}): ${a.display}`,

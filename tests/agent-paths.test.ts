@@ -115,7 +115,10 @@ describe('exclude globs', () => {
       const exclude = ['**', 'node_modules', '**'].join('/');
       writeFileSync(
         projectConfigPath(dir),
-        JSON.stringify({ version: 1, context: { include: ['src/**'], exclude: [exclude, 'secrets/**'] } }),
+        JSON.stringify({
+          version: 1,
+          context: { include: ['src/**'], exclude: [exclude, 'secrets/**'] },
+        }),
         'utf8',
       );
       expect(effectiveExcludeGlobs(dir)).toEqual([exclude, 'secrets/**']);

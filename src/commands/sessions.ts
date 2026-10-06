@@ -171,9 +171,10 @@ function renderMessage(r: Renderer, m: unknown): void {
     const calls = rawCalls
       .map((c) => {
         const cr = typeof c === 'object' && c !== null ? (c as Record<string, unknown>) : {};
-        const fn = typeof cr['function'] === 'object' && cr['function'] !== null
-          ? (cr['function'] as Record<string, unknown>)
-          : {};
+        const fn =
+          typeof cr['function'] === 'object' && cr['function'] !== null
+            ? (cr['function'] as Record<string, unknown>)
+            : {};
         const fname = typeof fn['name'] === 'string' ? fn['name'] : '?';
         return `${fname}(${typeof fn['arguments'] === 'string' ? fn['arguments'] : ''})`;
       })

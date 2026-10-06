@@ -36,14 +36,21 @@ describe('agent registry', () => {
     expect(listTools()).toEqual([]);
   });
 
-  it('builtinTools(): the stable wire order (11 tools, read tools first, exec gated)', () => {
+  it('builtinTools(): the stable wire order (18 tools, read tools first, exec gated)', () => {
     expect(builtinTools().map((t) => t.name)).toEqual([
       'read_file',
       'write_file',
       'edit_file',
+      'list_dir',
+      'create_dir',
+      'move',
+      'copy',
+      'remove',
       'glob',
       'grep',
       'run_command',
+      'web_search',
+      'web_fetch',
       'git_status',
       'git_diff',
       'git_log',
@@ -56,5 +63,7 @@ describe('agent registry', () => {
       expect(typeof t.description).toBe('string');
       expect(typeof t.permissionLabel({})).toBe('string');
     }
+    // the destructive tool never blanket-approves: every call asks
+    expect(builtinTools().find((t) => t.name === 'remove')?.neverAutoAllow).toBe(true);
   });
 });

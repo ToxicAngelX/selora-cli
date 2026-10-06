@@ -18,6 +18,7 @@ import { runModels } from './commands/models.js';
 import { runModel } from './commands/model.js';
 import { runKeys } from './commands/keys.js';
 import { runChat } from './commands/chat.js';
+import { runTheme } from './commands/theme.js';
 import { runInit } from './commands/init.js';
 import { runRun } from './commands/run.js';
 import { runSessions } from './commands/sessions.js';
@@ -175,15 +176,31 @@ export function buildProgram(io: CliIo): Command {
 
   const chatCmd = program
     .command('chat')
-    .description('chat with a model in an interactive streaming session')
+    .description(
+      'chat with a model in an interactive streaming session (agent tools, permission-gated)',
+    )
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')
     .option('--model <id>', 'model for this session (default: the configured default model)')
+    .option('--safe', 'restrict the agent to read-only tools')
+    .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
     .action(async (opts: Record<string, unknown>) => {
       await runChat(ctxFor(chatCmd), {
         model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
+        safe: opts['safe'] === true,
+        yes: opts['yes'] === true,
       });
+    });
+
+  const themeCmd = program
+    .command('theme [name]')
+    .description('show the UI theme, or set it (galaxy, nebula, mono)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .action(async (name: unknown, _opts: Record<string, unknown>) => {
+      await runTheme(ctxFor(themeCmd), { name: typeof name === 'string' ? name : undefined });
     });
 
   const initCmd = program
@@ -205,9 +222,7 @@ export function buildProgram(io: CliIo): Command {
   // command's own honest usage error rather than commander's generic one.
   const runCmd = program
     .command('run [prompt]')
-    .description(
-      'one-shot streaming completion with the agent tool loop (permissions gated)',
-    )
+    .description('one-shot streaming completion with the agent tool loop (permissions gated)')
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')

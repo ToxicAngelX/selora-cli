@@ -160,7 +160,9 @@ describe('agent loop — permission paths', () => {
       expect(readFileSync(join(dir, 'src', 'index.ts'), 'utf8')).toBe('export const x = 1;\n');
 
       // the second request carries the REAL tool result, not a denial
-      const chatReqs = server.requests.slice(before).filter((r) => r.path === '/v1/chat/completions');
+      const chatReqs = server.requests
+        .slice(before)
+        .filter((r) => r.path === '/v1/chat/completions');
       expect(chatReqs).toHaveLength(2);
       const second = JSON.parse(chatReqs[1]!.body) as { messages: Array<Record<string, unknown>> };
       expect(second.messages[2]!['role']).toBe('tool');
@@ -235,9 +237,9 @@ describe('agent loop — permission paths', () => {
       const err = cap.errText() + cap.err.join('\n');
       expect(err).toContain('· denied by user');
       expect(err).not.toContain('closed without an answer'); // a real 'n', not EOF
-      const second = JSON.parse(
-        server.requests.slice(before).at(-1)!.body,
-      ) as { messages: Array<Record<string, unknown>> };
+      const second = JSON.parse(server.requests.slice(before).at(-1)!.body) as {
+        messages: Array<Record<string, unknown>>;
+      };
       expect(String(second.messages[2]!['content'])).toBe('Permission denied by user.');
       expect(process.exitCode).toBeUndefined();
       // the run still produced the model's final answer
@@ -248,30 +250,33 @@ describe('agent loop — permission paths', () => {
   });
 
   // Spawns a real POSIX binary (printf) — on Windows run_command is opt-in only.
-  it.skipIf(process.platform === 'win32')("[e]dit: the user replaces the command; the REPLACEMENT runs, not the original", async () => {
-    saveConfig({ apiKey: FAKE_KEY_USER });
-    const dir = tempProject();
-    try {
-      routeRounds([COMMAND_ROUND]);
-      const before = server.requests.length;
-      const { io, cap } = ioWithStdin(['e', 'printf edited-by-user', 'y']);
-      await runRun(ctx(io), 'run something', { cwd: dir });
-      const err = cap.errText() + cap.err.join('\n');
-      // the exec prompt offers [e]dit; the replacement flow renders the current line
-      expect(err).toContain('[y]es / [n]o / [a]lways this session / [e]dit command');
-      expect(err).toContain('│   current: printf original');
-      expect(err).toContain('└─ Replacement command (empty line cancels):');
-      // the original was never executed — the replacement was
-      expect(err).not.toContain('ran: printf original');
-      expect(err).toContain('ran: printf edited-by-user');
-      const second = JSON.parse(
-        server.requests.slice(before).at(-1)!.body,
-      ) as { messages: Array<Record<string, unknown>> };
-      expect(String(second.messages[2]!['content'])).toContain('edited-by-user');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  it.skipIf(process.platform === 'win32')(
+    '[e]dit: the user replaces the command; the REPLACEMENT runs, not the original',
+    async () => {
+      saveConfig({ apiKey: FAKE_KEY_USER });
+      const dir = tempProject();
+      try {
+        routeRounds([COMMAND_ROUND]);
+        const before = server.requests.length;
+        const { io, cap } = ioWithStdin(['e', 'printf edited-by-user', 'y']);
+        await runRun(ctx(io), 'run something', { cwd: dir });
+        const err = cap.errText() + cap.err.join('\n');
+        // the exec prompt offers [e]dit; the replacement flow renders the current line
+        expect(err).toContain('[y]es / [n]o / [a]lways this session / [e]dit command');
+        expect(err).toContain('│   current: printf original');
+        expect(err).toContain('└─ Replacement command (empty line cancels):');
+        // the original was never executed — the replacement was
+        expect(err).not.toContain('ran: printf original');
+        expect(err).toContain('ran: printf edited-by-user');
+        const second = JSON.parse(server.requests.slice(before).at(-1)!.body) as {
+          messages: Array<Record<string, unknown>>;
+        };
+        expect(String(second.messages[2]!['content'])).toContain('edited-by-user');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('malformed tool arguments JSON: honest failure to the model — not a crash, breaker not tripped', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
@@ -284,9 +289,9 @@ describe('agent loop — permission paths', () => {
       const err = cap.errText() + cap.err.join('\n');
       expect(err).toContain('✗ Invalid tool arguments for read_file: not valid JSON');
       expect(err).not.toContain('┌─'); // no permission prompt for an unparseable call
-      const second = JSON.parse(
-        server.requests.slice(before).at(-1)!.body,
-      ) as { messages: Array<Record<string, unknown>> };
+      const second = JSON.parse(server.requests.slice(before).at(-1)!.body) as {
+        messages: Array<Record<string, unknown>>;
+      };
       expect(String(second.messages[2]!['content'])).toContain('not valid JSON');
       // one failure does not abort — the model answered after the feedback
       expect(cap.outText()).toContain('Hello, world!');
@@ -311,7 +316,18 @@ describe('agent loop — modes', () => {
     const req = server.requests.slice(before).find((r) => r.path === '/v1/chat/completions')!;
     const tools = (JSON.parse(req.body) as { tools: Array<Record<string, unknown>> }).tools;
     const names = tools.map((t) => (t['function'] as Record<string, unknown>)['name']);
-    expect(names).toEqual(['read_file', 'glob', 'grep', 'git_status', 'git_diff', 'git_log']);
+    // v0.3: list_dir + the web tools joined the read-only set
+    expect(names).toEqual([
+      'read_file',
+      'list_dir',
+      'glob',
+      'grep',
+      'web_search',
+      'web_fetch',
+      'git_status',
+      'git_diff',
+      'git_log',
+    ]);
     // the run itself is unaffected (no tools requested)
     expect(cap.outText()).toContain('Hello, world!');
   });
@@ -330,12 +346,10 @@ describe('agent loop — modes', () => {
       // the write never happened — the safe toolset has no write tools at all
       expect(existsSync(join(dir, 'out.txt'))).toBe(false);
       // the request carried only the 6 read-only tools
-      const req = server.requests
-        .slice(before)
-        .find((r) => r.path === '/v1/chat/completions')!;
-      const names = (JSON.parse(req.body) as { tools: Array<{ function: { name: string } }> }).tools.map(
-        (t) => t.function.name,
-      );
+      const req = server.requests.slice(before).find((r) => r.path === '/v1/chat/completions')!;
+      const names = (
+        JSON.parse(req.body) as { tools: Array<{ function: { name: string } }> }
+      ).tools.map((t) => t.function.name);
       expect(names).not.toContain('write_file');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -358,7 +372,8 @@ describe('agent loop — modes', () => {
       expect(err).toContain('· wrote out.txt');
       // the model received the tool summary as the result
       const second = JSON.parse(
-        server.requests.slice(before).find((r, i) => r.path === '/v1/chat/completions' && i > 0)!.body,
+        server.requests.slice(before).find((r, i) => r.path === '/v1/chat/completions' && i > 0)!
+          .body,
       ) as { messages: Array<Record<string, unknown>> };
       expect(String(second.messages[2]!['content'])).toContain('wrote out.txt');
     } finally {
@@ -384,18 +399,21 @@ describe('agent loop — modes', () => {
       expect(parsed.ok).toBe(true);
       expect(parsed.turns).toBe(2);
       expect(parsed.tools).toEqual([
-        { tool: 'read_file', label: 'read_file(src/index.ts)', ok: false, summary: 'denied by user' },
+        {
+          tool: 'read_file',
+          label: 'read_file(src/index.ts)',
+          ok: false,
+          summary: 'denied by user',
+        },
       ]);
       // nothing but JSON on stdout; no prompt on stderr
       expect(cap.outText()).toBe('');
       expect(cap.errText()).toBe('');
       // the tool content never reached the model (denied before execution)
-      const lastReq = server.requests
-        .filter((r) => r.path === '/v1/chat/completions')
-        .at(-1)!;
-      expect(String((JSON.parse(lastReq.body) as { messages: unknown[] }).messages[2])).not.toContain(
-        'export const x',
-      );
+      const lastReq = server.requests.filter((r) => r.path === '/v1/chat/completions').at(-1)!;
+      expect(
+        String((JSON.parse(lastReq.body) as { messages: unknown[] }).messages[2]),
+      ).not.toContain('export const x');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -530,7 +548,11 @@ describe('agent loop — sessions', () => {
       routePlain();
       const before = server.requests.length;
       const first = ioWithStdin([]);
-      await runRun(ctx(first.io), 'first prompt', { cwd: dir, session: 'work', model: 'glm-5.3-flash' });
+      await runRun(ctx(first.io), 'first prompt', {
+        cwd: dir,
+        session: 'work',
+        model: 'glm-5.3-flash',
+      });
       // saved: visible project-local file with the full exchange
       const file = join(dir, '.selora', 'sessions', 'work.json');
       expect(existsSync(file)).toBe(true);
@@ -622,7 +644,9 @@ describe('agent loop — sessions', () => {
       const body = JSON.parse(server.requests.slice(before).at(-1)!.body) as { model: string };
       expect(body.model).toBe('glm-5.3-flash');
       // the flag's model was saved into the session (it is what actually ran)
-      const stored = JSON.parse(readFileSync(join(dir, '.selora', 'sessions', 'm.json'), 'utf8')) as {
+      const stored = JSON.parse(
+        readFileSync(join(dir, '.selora', 'sessions', 'm.json'), 'utf8'),
+      ) as {
         model: string;
       };
       expect(stored.model).toBe('glm-5.3-flash');

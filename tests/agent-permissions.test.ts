@@ -130,3 +130,47 @@ describe('SessionAllows — memory-only auto-allows', () => {
     expect(new SessionAllows().check('read', 'read_file', 'read_file(x)')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// v0.3 menu primitives
+// ---------------------------------------------------------------------------
+
+import { menuOptions, parseMenuKey, renderMenu, plainMenuStyle } from '../src/agent/permissions';
+
+describe('permission menu primitives', () => {
+  it('parseMenuKey: arrows, enter, shortcuts, escape (Ctrl+C/Esc/q)', () => {
+    expect(parseMenuKey('\x1b[A')).toBe('up');
+    expect(parseMenuKey('\x1bOA')).toBe('up');
+    expect(parseMenuKey('\x1b[B')).toBe('down');
+    expect(parseMenuKey('k')).toBe('up');
+    expect(parseMenuKey('j')).toBe('down');
+    expect(parseMenuKey('\r')).toBe('enter');
+    expect(parseMenuKey('\n')).toBe('enter');
+    expect(parseMenuKey('y')).toBe('y');
+    expect(parseMenuKey('A')).toBe('a');
+    expect(parseMenuKey('N')).toBe('n');
+    expect(parseMenuKey('e')).toBe('e');
+    expect(parseMenuKey('\x03')).toBe('escape'); // Ctrl+C
+    expect(parseMenuKey('\x1b')).toBe('escape');
+    expect(parseMenuKey('q')).toBe('escape');
+    expect(parseMenuKey('x')).toBe('other');
+    expect(parseMenuKey('')).toBe('other');
+  });
+
+  it('menuOptions: edit offered for exec; always dropped for neverAutoAllow tools', () => {
+    expect(menuOptions(false, false)).toEqual(['Yes', 'Yes, always this session', 'No']);
+    expect(menuOptions(true, false)).toEqual(['Yes', 'Yes, always this session', 'No', 'Edit command']);
+    expect(menuOptions(false, true)).toEqual(['Yes', 'No']);
+    expect(menuOptions(true, true)).toEqual(['Yes', 'No', 'Edit command']);
+  });
+
+  it('renderMenu marks exactly the selected option with the ❯ marker', () => {
+    const style = plainMenuStyle();
+    const opts = menuOptions(false, false);
+    const lines = renderMenu(opts, 1, style);
+    expect(lines[0]).toBe('  Yes');
+    expect(lines[1]).toBe('❯ Yes, always this session');
+    expect(lines[2]).toBe('  No');
+    expect(renderMenu(opts, 0, style)[0]).toBe('❯ Yes');
+  });
+});

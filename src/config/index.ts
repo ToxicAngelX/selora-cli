@@ -23,6 +23,10 @@ export interface ConfigFile {
   apiUrl?: string;
   apiKey?: string;
   defaultModel?: string;
+  /** UI theme: 'galaxy' (default), 'nebula', or 'mono' (no colors). */
+  theme?: string;
+  /** v0.3: opt-in for the web tools (web_search/web_fetch talk to non-gateway hosts). */
+  webTools?: boolean;
 }
 
 export interface Settings {
@@ -90,6 +94,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ConfigFile {
   if (apiKey !== undefined) cfg.apiKey = apiKey;
   const defaultModel = pickString(rec, 'defaultModel');
   if (defaultModel !== undefined) cfg.defaultModel = defaultModel;
+  const theme = pickString(rec, 'theme');
+  if (theme !== undefined) cfg.theme = theme;
+  if (Object.hasOwn(rec, 'webTools')) cfg.webTools = rec['webTools'] === true;
   return cfg;
 }
 

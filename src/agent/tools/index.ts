@@ -10,6 +10,8 @@ import { editFileTool, readFileTool, writeFileTool } from './files.js';
 import { runCommandTool } from './exec.js';
 import { globTool, grepTool } from './search.js';
 import { gitCommitTool, gitDiffTool, gitLogTool, gitRestoreTool, gitStatusTool } from './git.js';
+import { copyTool, createDirTool, listDirTool, moveTool, removeTool } from './fs.js';
+import { webFetchTool, webSearchTool } from './web.js';
 
 /** The built-in tools, in a stable order (wire order + docs order). */
 export function builtinTools(): Tool[] {
@@ -17,9 +19,16 @@ export function builtinTools(): Tool[] {
     readFileTool,
     writeFileTool,
     editFileTool,
+    listDirTool,
+    createDirTool,
+    moveTool,
+    copyTool,
+    removeTool,
     globTool,
     grepTool,
     runCommandTool,
+    webSearchTool,
+    webFetchTool,
     gitStatusTool,
     gitDiffTool,
     gitLogTool,

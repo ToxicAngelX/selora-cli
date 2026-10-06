@@ -22,9 +22,7 @@ import { globToRegExp } from './tools/glob.js';
 /** Files larger than this are refused by read/search tools (size reported). */
 export const MAX_TOOL_FILE_BYTES = 256 * 1024;
 
-export type PathResolution =
-  | { ok: true; abs: string; rel: string }
-  | { ok: false; error: string };
+export type PathResolution = { ok: true; abs: string; rel: string } | { ok: false; error: string };
 
 function inside(root: string, candidate: string): boolean {
   if (candidate === root) return true;

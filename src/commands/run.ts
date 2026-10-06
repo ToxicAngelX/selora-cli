@@ -42,6 +42,9 @@ import {
   type PermissionAsker,
 } from '../agent/permissions.js';
 import type { Tool } from '../agent/tool.js';
+import { themeFor } from '../ui/theme.js';
+import { renderUnifiedDiff } from '../ui/diff.js';
+import { diffStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
 import {
   loadSession,
   newSession,
@@ -65,9 +68,16 @@ export interface RunFlags {
 }
 
 type ModelSource =
-  '--model flag' | 'resumed session' | 'project selora.json' | 'global default model' | 'built-in default';
+  | '--model flag'
+  | 'resumed session'
+  | 'project selora.json'
+  | 'global default model'
+  | 'built-in default';
 
-function resolveModel(flags: RunFlags, session: StoredSession | null): {
+function resolveModel(
+  flags: RunFlags,
+  session: StoredSession | null,
+): {
   model: string;
   source: ModelSource;
 } {
@@ -85,7 +95,10 @@ function resolveModel(flags: RunFlags, session: StoredSession | null): {
   return { model: DEFAULT_MODEL_FALLBACK, source: 'built-in default' };
 }
 
-function resolveMaxTurns(flags: RunFlags, cwd: string): { maxTurns?: number | undefined; error?: string } {
+function resolveMaxTurns(
+  flags: RunFlags,
+  cwd: string,
+): { maxTurns?: number | undefined; error?: string } {
   if (flags.maxTurns !== undefined) {
     if (!Number.isInteger(flags.maxTurns) || flags.maxTurns < 1 || flags.maxTurns > 200) {
       return { maxTurns: undefined, error: '--max-turns must be an integer between 1 and 200' };
@@ -154,7 +167,8 @@ export async function runRun(
     else r.fail(message);
     return;
   }
-  if (ctx.debug) r.bullet(`agent: max ${maxTurns} turns${flags.safe ? ' (safe mode: read-only tools)' : ''}`);
+  if (ctx.debug)
+    r.bullet(`agent: max ${maxTurns} turns${flags.safe ? ' (safe mode: read-only tools)' : ''}`);
 
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
@@ -166,13 +180,17 @@ export async function runRun(
   });
 
   // Initial history: the resumed session (if any) + this prompt.
-  const messages: ChatMessage[] = [
-    ...(session?.messages ?? []),
-    { role: 'user', content: prompt },
-  ];
+  const messages: ChatMessage[] = [...(session?.messages ?? []), { role: 'user', content: prompt }];
 
   // The toolset: the built-ins, filtered to read-only under --safe.
-  const tools: Tool[] = flags.safe ? builtinTools().filter((t) => t.kind === 'read') : builtinTools();
+  const tools: Tool[] = flags.safe
+    ? builtinTools().filter((t) => t.kind === 'read')
+    : builtinTools();
+
+  // v0.3: the galaxy theme for the permission prompt's colored diffs and the
+  // rich tool display (TTY only; plain otherwise — NO_COLOR/non-TTY stay clean).
+  const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+  const richDisplay = ctx.io.isTTY && !ctx.json;
 
   // The permission gate. JSON mode cannot prompt: --yes auto-approves,
   // otherwise every tool is denied (the denial text says how to change that).
@@ -180,7 +198,18 @@ export async function runRun(
     ? flags.yes === true
       ? createAutoAsker()
       : createDenyingAsker()
-    : createInteractiveAsker({ stdin: ctx.io.stdin, isTTY: ctx.io.isTTY, err: ctx.io.err });
+    : createInteractiveAsker({
+        stdin: ctx.io.stdin,
+        isTTY: ctx.io.isTTY,
+        err: ctx.io.err,
+        rawWrite: ctx.io.writeErr,
+        style: {
+          marker: (s) => theme.cyan(s),
+          selected: (s) => theme.star(s),
+          option: (s) => theme.dim(s),
+          hint: (s) => theme.dim(s),
+        },
+      });
 
   let content = '';
   let sawReasoning = false;
@@ -194,6 +223,8 @@ export async function runRun(
       cwd,
       permissions,
       autoApprove: flags.yes === true,
+      renderDiff: (before, after) =>
+        renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 }),
       callbacks: {
         onDelta: (text) => {
           content += text;
@@ -205,8 +236,31 @@ export async function runRun(
           if (!ctx.json) r.writeRawGray(text);
         },
         onActivity: (line) => {
-          if (!ctx.json) r.writeRawGray(`${line}\n`);
+          // Plain progress lines — only in the non-rich (non-TTY) renderer.
+          if (!ctx.json && !richDisplay) r.writeRawGray(`${line}\n`);
         },
+        onToolStart: richDisplay
+          ? (name, label) => {
+              ctx.io.writeErr(`${renderToolStart(name, label, theme)}\n`);
+            }
+          : undefined,
+        onToolResult: richDisplay
+          ? (info) => {
+              for (const outLine of renderToolResult(
+                {
+                  name: info.name,
+                  label: info.label,
+                  ok: info.ok,
+                  summary: info.summary,
+                  content: info.content,
+                  diff: info.diff,
+                },
+                theme,
+              )) {
+                ctx.io.writeErr(`${outLine}\n`);
+              }
+            }
+          : undefined,
         onTurnComplete: (totals) => {
           if (!ctx.json) {
             const footer = chatFooterLine(totals.usage, totals.charge);

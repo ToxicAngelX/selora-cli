@@ -112,7 +112,12 @@ describe('walkTree', () => {
       const excl = [['**', 'node_modules', '**'].join('/'), ['**', 'dist', '**'].join('/')];
       const walk = await walkTree({ root: dir, exclude: excl });
       expect(walk.truncated).toBe(false);
-      expect(walk.entries.map((e) => e.rel)).toEqual(['out.txt', 'src/a.ts', 'src/b.ts', 'src/sub/c.ts']);
+      expect(walk.entries.map((e) => e.rel)).toEqual([
+        'out.txt',
+        'src/a.ts',
+        'src/b.ts',
+        'src/sub/c.ts',
+      ]);
 
       // no excludes: everything is visible
       const all = await walkTree({ root: dir, exclude: [] });

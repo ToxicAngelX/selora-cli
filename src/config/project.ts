@@ -32,6 +32,8 @@ export interface ProjectAgentConfig {
   maxTurns?: number;
   /** Opt-in for run_command on Windows (default: refused). */
   allowWindowsCmd?: boolean;
+  /** v0.3: opt-in for web tools in this project (also global config / env). */
+  webTools?: boolean;
 }
 
 export interface ProjectConfig {
@@ -115,6 +117,13 @@ export function loadProjectConfig(cwd: string): ProjectConfig {
         agent.allowWindowsCmd = a['allowWindowsCmd'];
       } else {
         console.error('· Ignoring agent.allowWindowsCmd — must be a boolean.');
+      }
+    }
+    if (Object.hasOwn(a, 'webTools')) {
+      if (typeof a['webTools'] === 'boolean') {
+        agent.webTools = a['webTools'];
+      } else {
+        console.error('· Ignoring agent.webTools — must be a boolean.');
       }
     }
     if (Object.keys(agent).length > 0) cfg.agent = agent;

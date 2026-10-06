@@ -643,7 +643,12 @@ export const CHAT_STREAM_TOOL_CALL_SPLIT_ARGS: string[] = [
         index: 0,
         delta: {
           tool_calls: [
-            { index: 0, id: 'call_SPLIT1', type: 'function', function: { name: 'read_file', arguments: '{"pa' } },
+            {
+              index: 0,
+              id: 'call_SPLIT1',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"pa' },
+            },
           ],
         },
         finish_reason: null,
@@ -725,7 +730,12 @@ export const CHAT_STREAM_TOOL_CALL_UNKNOWN: string[] = [
         index: 0,
         delta: {
           tool_calls: [
-            { index: 0, id: 'call_GHOST', type: 'function', function: { name: 'nonexistent_tool', arguments: '{}' } },
+            {
+              index: 0,
+              id: 'call_GHOST',
+              type: 'function',
+              function: { name: 'nonexistent_tool', arguments: '{}' },
+            },
           ],
         },
         finish_reason: null,
@@ -750,7 +760,12 @@ export const CHAT_STREAM_TOOL_CALL_BAD_JSON: string[] = [
         index: 0,
         delta: {
           tool_calls: [
-            { index: 0, id: 'call_BADJSON', type: 'function', function: { name: 'read_file', arguments: '{not json' } },
+            {
+              index: 0,
+              id: 'call_BADJSON',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{not json' },
+            },
           ],
         },
         finish_reason: null,

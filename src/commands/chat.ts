@@ -1,34 +1,71 @@
 /**
- * `selora chat [--model <id>]` — interactive streaming REPL.
+ * `selora chat [--model <id>] [--safe] [--yes]` — the interactive agent REPL
+ * (v0.3: Claude-Code-style, galaxy-themed).
  *
- * Model resolution: --model > config defaultModel > 'glm-5.3-flash'. The
- * model is VERIFIED via the public GET /v1/models/:id route before the REPL
- * starts; a 404 prints the backend's honest "Model not available" (plus a
- * `selora models` hint) and never opens the prompt.
+ * What changed in v0.3 (docs/commands/chat.md):
+ *  - a startup screen (gradient logo + starfield + info box: version, model,
+ *    cwd, plan, tips) — TTY only, never --json;
+ *  - every message runs the AGENT LOOP with the full toolset attached
+ *    (permission-gated per call; --safe restricts to read-only tools, --yes
+ *    auto-approves). One shared readline feeds both the prompt and the
+ *    permission menu;
+ *  - replies stream through the markdown renderer (completed lines render
+ *    live; fenced code blocks render as dim boxed units);
+ *  - tool calls render as `● Name(args)` + indented `⎿` result lines with
+ *    collapsed content and colored diffs for edits;
+ *  - a galaxy spinner (✦ Warping… 12s · tokens) runs while a reply streams —
+ *    only on a real TTY stderr, never under NO_COLOR/non-TTY/--json;
+ *  - slash commands: /help /model /theme /clear /tools /permissions /cost
+ *    /exit; a session summary (duration · tokens · files changed) on exit.
  *
- * Conversation state is in-memory only — never written to disk. Aborted
- * (Ctrl+C) and failed turns are dropped from the history entirely, so a
- * retry starts clean. Reasoning deltas stream dim-gray to stderr; content
- * deltas stream to stdout immediately; the per-reply footer appears ONLY
- * when the usage chunk actually arrived — real numbers only, never invented.
+ * Unchanged v0.2 behavior: model verification before the REPL starts
+ * (404 → the backend's honest message, no REPL), in-memory-only history
+ * (aborted/failed turns dropped entirely), reasoning deltas dim-gray on
+ * stderr, footers ONLY when the usage chunk actually arrived, Ctrl+C aborts
+ * a reply and keeps the session, Ctrl+D/Ctrl+C at the prompt exits.
  */
 
 import * as readline from 'node:readline';
 import { Writable } from 'node:stream';
 import type { CliContext } from '../context.js';
-import { loadConfig, resolveSettings } from '../config/index.js';
+import { loadConfig, resolveSettings, saveConfig } from '../config/index.js';
+import { loadProjectConfig } from '../config/project.js';
 import { SeloraClient } from '../api/client.js';
 import { SeloraApiError } from '../api/errors.js';
 import { getModel } from '../api/endpoints/models.js';
-import { streamChat, type ChatMessage } from '../api/endpoints/chat.js';
+import { getMe } from '../api/endpoints/me.js';
+import type { ChatMessage } from '../api/endpoints/chat.js';
 import { getStoredKey } from '../auth/storage.js';
 import { PromptClosedError } from '../auth/prompts.js';
 import { Renderer } from '../terminal/render.js';
-import { chatFooterLine } from './chat-footer.js';
+import { chatFooterLine, formatChatCost } from './chat-footer.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
+import { VERSION } from '../version.js';
+import { formatCount, formatDurationCompact } from '../format.js';
+import { microToWireString } from '../money.js';
+import { runAgentLoop, DEFAULT_MAX_TURNS } from '../agent/loop.js';
+import { builtinTools } from '../agent/tools/index.js';
+import {
+  SessionAllows,
+  createInteractiveAsker,
+  createAutoAsker,
+  createDenyingAsker,
+  type PermissionAsker,
+} from '../agent/permissions.js';
+import type { Tool } from '../agent/tool.js';
+import { Theme, themeFor, isThemeName, type ThemeName } from '../ui/theme.js';
+import { renderStartupScreen } from '../ui/logo.js';
+import { MarkdownStream } from '../ui/markdown.js';
+import { renderUnifiedDiff } from '../ui/diff.js';
+import { Spinner } from '../ui/spinner.js';
+import { diffStyleFor, markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
 
 export interface ChatFlags {
   model?: string | undefined;
+  /** Restrict the agent to read-only tools. */
+  safe?: boolean;
+  /** Auto-approve tool execution (non-interactive; still filtered by --safe). */
+  yes?: boolean;
 }
 
 /**
@@ -54,11 +91,35 @@ function modelLabel(m: SessionModel): string {
   return m.displayName !== '' ? `${m.id} (${m.displayName})` : m.id;
 }
 
-/**
- * Per-reply cost display lives in chat-footer.ts (shared with `selora run`):
- * sub-dime amounts show 3 decimals ("$0.018") so a typical per-message charge
- * does not collapse to "$0.01".
- */
+/** The startup box's plan line — honest, degrades to 'unknown' on failure. */
+async function fetchPlanLabel(client: SeloraClient): Promise<string> {
+  try {
+    const me = await getMe(client);
+    if (me.plan_term !== null && me.plan_term.plan_name !== null) return me.plan_term.plan_name;
+    if (me.plan_term !== null && me.plan_term.kind === 'trial') return 'free trial';
+    if (me.plan !== null && me.plan.name !== '') return me.plan.name;
+    return 'no active plan';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function shortCwd(): string {
+  const cwd = process.cwd();
+  const home = process.env['HOME'] ?? '';
+  return home !== '' && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+}
+
+/** Tools that count as "files changed" for the exit summary. */
+const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'create_dir',
+  'move',
+  'copy',
+  'remove',
+  'git_commit',
+]);
 
 export async function runChat(
   ctx: CliContext,
@@ -126,6 +187,24 @@ export async function runChat(
     return;
   }
 
+  // The galaxy theme. Color level keys off the REAL stdout (a captured test
+  // io is "TTY" but a piped stdout is not — NO_COLOR/non-TTY stay plain).
+  let themeName: ThemeName =
+    loadConfig().theme === 'nebula' ? 'nebula' : loadConfig().theme === 'mono' ? 'mono' : 'galaxy';
+  let theme = themeFor(themeName, process.stdout.isTTY === true);
+
+  if (!ctx.json) {
+    const plan = await fetchPlanLabel(client);
+    const width = process.stdout.columns ?? 80;
+    for (const line of renderStartupScreen(
+      { version: VERSION, model: modelLabel(current), cwd: shortCwd(), plan },
+      theme,
+      { width },
+    )) {
+      r.line(line);
+    }
+  }
+
   r.ok(`Connected to ${modelLabel(current)}`);
 
   // Persistent readline interface over stdin (the buffering pattern from
@@ -180,10 +259,66 @@ export async function runChat(
     });
   }
 
+  // ONE permission asker for the whole session, sharing the REPL's line
+  // queue (never a second 'line' listener — the menu pauses the editor and
+  // takes raw mode only while it runs).
+  const permissions: PermissionAsker = ctx.json
+    ? flags.yes === true
+      ? createAutoAsker()
+      : createDenyingAsker()
+    : createInteractiveAsker({
+        stdin: ctx.io.stdin,
+        isTTY: ctx.io.isTTY,
+        err: ctx.io.err,
+        nextLine,
+        pauseInput: () => rl.pause(),
+        resumeInput: () => rl.resume(),
+        rawWrite: ctx.io.writeErr,
+        style: {
+          marker: (s) => theme.cyan(s),
+          selected: (s) => theme.star(s),
+          option: (s) => theme.dim(s),
+          hint: (s) => theme.dim(s),
+        },
+      });
+
+  // Session-scoped permission memory (memory-only, never persisted).
+  const allows = new SessionAllows();
+
+  // Session stats for the footer, /cost, and the exit summary.
+  const startedAt = Date.now();
+  let sessionTokens = 0;
+  let sessionCostMicro: bigint | undefined = undefined;
+  let sessionRequests = 0;
+  const filesChanged = new Set<string>();
+
+  const tools: Tool[] = flags.safe
+    ? builtinTools().filter((t) => t.kind === 'read')
+    : builtinTools();
+  const maxTurns = loadProjectConfig(process.cwd()).agent?.maxTurns ?? DEFAULT_MAX_TURNS;
+  const permissionMode = flags.safe === true ? 'safe' : flags.yes === true ? 'auto' : 'ask';
+
+  const renderDiff = (before: string, after: string): readonly string[] =>
+    renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 });
+
+  const spinner = new Spinner(
+    { write: ctx.io.writeErr },
+    { theme, tokenSource: () => (sessionTokens > 0 ? sessionTokens : undefined) },
+  );
+  // The spinner redraws a line in place — only meaningful on a real TTY.
+  const spinnerAllowed = process.stderr.isTTY === true && !ctx.json;
+
+  /** The dim status line + the gradient ❯ marker (the prompt). */
+  function drawPrompt(): void {
+    const tokens = sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : '';
+    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd()} · ${permissionMode}${tokens}\n`));
+    ctx.io.writeErr(`${theme.gradient('❯')} `);
+  }
+
   const history: ChatMessage[] = [];
 
   for (;;) {
-    r.writeRawGray('> ');
+    drawPrompt();
     let line: string;
     try {
       line = await nextLine();
@@ -195,9 +330,67 @@ export async function runChat(
     if (trimmed === '') continue; // empty line → reprompt
     if (trimmed === '/exit') break;
     if (trimmed === '/help') {
-      r.bullet('/model [id] — show or switch the model (verified before switching)');
-      r.bullet('/help — show this list');
-      r.bullet('/exit — end the session (Ctrl+D also works)');
+      for (const cmd of [
+        '/help — show this list',
+        '/model [id] — show or switch the model (verified before switching)',
+        '/theme [name] — show or switch the UI theme (galaxy, nebula, mono)',
+        '/clear — clear the conversation history',
+        '/tools — list the agent tools available this session',
+        '/permissions — show what is auto-allowed this session',
+        '/cost — session totals (requests, tokens, cost)',
+        '/exit — end the session (Ctrl+D also works)',
+      ]) {
+        r.bullet(cmd);
+      }
+      continue;
+    }
+    if (trimmed === '/cost') {
+      const parts = [
+        `Requests: ${formatCount(BigInt(sessionRequests))}`,
+        `Tokens: ${formatCount(BigInt(sessionTokens))}`,
+      ];
+      if (sessionCostMicro !== undefined && sessionCostMicro !== 0n) {
+        parts.push(`Cost: ${formatChatCost(microToWireString(sessionCostMicro))}`);
+      }
+      r.bullet(parts.join(' · '));
+      continue;
+    }
+    if (trimmed === '/tools') {
+      r.bullet(
+        `Tools (${tools.length}, mode: ${permissionMode}): ${tools.map((t) => t.name).join(', ')}`,
+      );
+      continue;
+    }
+    if (trimmed === '/permissions') {
+      const dump = allows.dump();
+      if (dump.rules.length === 0 && dump.outsideDirs.length === 0) {
+        r.bullet('Nothing auto-allowed yet — every tool call asks first.');
+      } else {
+        for (const rule of dump.rules) r.bullet(`auto-allowed: ${rule}`);
+        for (const dir of dump.outsideDirs) r.bullet(`outside access: ${dir}`);
+      }
+      r.bullet('(memory-only — gone when the session ends)');
+      continue;
+    }
+    if (trimmed === '/clear') {
+      history.length = 0;
+      r.bullet('History cleared.');
+      continue;
+    }
+    if (trimmed === '/theme' || trimmed.startsWith('/theme ')) {
+      const arg = trimmed.slice('/theme'.length).trim();
+      if (arg === '') {
+        r.bullet(`Current theme: ${themeName} (available: galaxy, nebula, mono)`);
+        continue;
+      }
+      if (!isThemeName(arg)) {
+        r.fail(`unknown theme "${arg}" — available: galaxy, nebula, mono`);
+        continue;
+      }
+      themeName = arg;
+      theme = new Theme(theme.palette, theme.level);
+      saveConfig({ ...loadConfig(), theme: themeName });
+      r.ok(`Theme set to ${themeName}`);
       continue;
     }
     if (trimmed === '/model' || trimmed.startsWith('/model ')) {
@@ -229,37 +422,95 @@ export async function runChat(
       continue;
     }
 
-    // A chat turn: stream with the full in-memory history.
+    // A chat turn: the agent loop with the full in-memory history.
     history.push({ role: 'user', content: trimmed });
     const controller = new AbortController();
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
-    let content = '';
+    const md = new MarkdownStream(markdownStyleFor(theme));
     let sawReasoning = false;
+    let stopSpinnerOnDelta = true;
+    if (spinnerAllowed) spinner.start();
     try {
-      const result = await streamChat(
+      const result = await runAgentLoop({
         client,
-        { model: current.id, messages: [...history], signal: controller.signal },
-        {
+        model: current.id,
+        messages: [...history],
+        tools,
+        maxTurns,
+        cwd: process.cwd(),
+        permissions,
+        autoApprove: flags.yes === true,
+        allows,
+        renderDiff,
+        signal: controller.signal,
+        callbacks: {
           onDelta: (text) => {
-            content += text;
-            r.writeRaw(text); // stdout, immediately, no buffering
+            if (stopSpinnerOnDelta) {
+              spinner.stop();
+              stopSpinnerOnDelta = false;
+            }
+            const rendered = md.push(text);
+            if (rendered !== '') r.writeRaw(`${rendered}\n`); // stdout, live
           },
           onReasoning: (text) => {
             sawReasoning = true;
+            if (spinner.running) spinner.stop();
             r.writeRawGray(text); // stderr, dim gray
           },
+          onToolStart: (name, label) => {
+            if (spinner.running) spinner.stop();
+            stopSpinnerOnDelta = false;
+            ctx.io.writeErr(`${renderToolStart(name, label, theme)}\n`);
+          },
+          onToolResult: (info) => {
+            for (const outLine of renderToolResult(
+              {
+                name: info.name,
+                label: info.label,
+                ok: info.ok,
+                summary: info.summary,
+                content: info.content,
+                diff: info.diff,
+              },
+              theme,
+            )) {
+              ctx.io.writeErr(`${outLine}\n`);
+            }
+            if (spinnerAllowed) spinner.start();
+          },
+          onTurnComplete: (totals) => {
+            const footer = chatFooterLine(totals.usage, totals.charge);
+            if (footer !== undefined) r.gray(footer);
+          },
         },
-      );
+      });
+      const tail = md.flush();
+      if (tail !== '') r.writeRaw(`${tail}\n`);
       if (sawReasoning) r.writeRawGray('\n');
-      r.writeRaw('\n');
-      history.push({ role: 'assistant', content });
-      const footer = chatFooterLine(result.usage, result.charge);
-      if (footer !== undefined) r.gray(footer);
+
+      // The loop returned — the history is consistent; adopt it.
+      history.length = 0;
+      history.push(...result.messages);
+      sessionRequests += 1;
+      if (result.usageTotal !== undefined) sessionTokens += result.usageTotal.totalTokens;
+      if (result.chargeTotalMicro !== undefined) {
+        sessionCostMicro = (sessionCostMicro ?? 0n) + result.chargeTotalMicro;
+      }
+      for (const e of result.toolEvents) {
+        if (e.ok && WRITE_TOOL_NAMES.has(e.name)) filesChanged.add(e.label);
+      }
+      if (result.stop === 'max-turns') {
+        r.bullet(`stopped at the turn cap (${maxTurns}) — raise agent.maxTurns in selora.json`);
+      } else if (result.stop === 'tool-failures') {
+        process.exitCode = 1;
+        r.fail('agent stopped: 3 consecutive tool failures');
+      }
     } catch (err) {
-      if (content !== '') r.writeRaw('\n'); // end the partial line
+      spinner.stop();
+      // The failed turn is dropped entirely — the user can retype it.
+      history.pop();
       if (err instanceof SeloraApiError && err.kind === 'cancelled') {
-        history.pop(); // drop the aborted pair entirely
         r.bullet('Request cancelled — session kept');
       } else if (
         err instanceof SeloraApiError &&
@@ -270,21 +521,39 @@ export async function runChat(
         currentAbort = null;
         rl.close();
         return;
+      } else if (err instanceof SeloraApiError) {
+        r.fail(err.message);
+        if (err.hint !== undefined) r.bullet(err.hint);
       } else {
-        history.pop(); // failed turn dropped — the user can retype it
-        if (err instanceof SeloraApiError) {
-          r.fail(err.message);
-          if (err.hint !== undefined) r.bullet(err.hint);
-        } else {
-          r.fail('Unexpected CLI error.');
-          r.bullet('(run with --debug for details)');
-        }
+        r.fail('Unexpected CLI error.');
+        r.bullet('(run with --debug for details)');
       }
     } finally {
+      spinner.stop();
       currentAbort = null;
     }
   }
 
+  spinner.stop();
   rl.close();
+
+  // The exit summary: duration, requests, tokens, cost, files changed.
+  const elapsed = formatDurationCompact(Date.now() - startedAt);
+  const parts = [
+    `Session: ${elapsed === '' ? 'under 1s' : elapsed}`,
+    `${formatCount(BigInt(sessionRequests))} request${sessionRequests === 1 ? '' : 's'}`,
+  ];
+  if (sessionTokens > 0) parts.push(`${formatCount(BigInt(sessionTokens))} tokens`);
+  if (sessionCostMicro !== undefined && sessionCostMicro !== 0n) {
+    parts.push(`${formatChatCost(microToWireString(sessionCostMicro))}`);
+  }
+  if (filesChanged.size > 0) {
+    const names = [...filesChanged];
+    const shown = names.slice(0, 3).join(', ');
+    parts.push(
+      `${names.length} file change${names.length === 1 ? '' : 's'}${names.length > 3 ? ` (${shown}…)` : names.length === 3 ? ` (${shown})` : ` (${shown})`}`,
+    );
+  }
+  r.gray(`· ${parts.join(' · ')}`);
   r.ok('Session ended');
 }

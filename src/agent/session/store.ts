@@ -151,7 +151,8 @@ export function listSessions(root: string): SessionSummary[] {
   for (const file of names) {
     const name = file.slice(0, -'.json'.length);
     const s = loadSession(root, name);
-    if (s !== null) out.push({ name, model: s.model, updatedAt: s.updatedAt, messageCount: s.messages.length });
+    if (s !== null)
+      out.push({ name, model: s.model, updatedAt: s.updatedAt, messageCount: s.messages.length });
   }
   out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
   return out;

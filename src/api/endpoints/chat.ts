@@ -137,7 +137,8 @@ function decodeCompleteCall(v: unknown): DecodedToolCall | null {
   const id = nonEmptyStr(c, 'id');
   const name = nonEmptyStr(fn, 'name');
   if (id === undefined || name === undefined) return null;
-  const args = Object.hasOwn(fn, 'arguments') && typeof fn['arguments'] === 'string' ? fn['arguments'] : '';
+  const args =
+    Object.hasOwn(fn, 'arguments') && typeof fn['arguments'] === 'string' ? fn['arguments'] : '';
   return { id, name, arguments: args };
 }
 
@@ -156,7 +157,10 @@ export async function streamChat(
   };
   let done = false;
   // Tool-call fragments keyed by their wire `index`; assembled at stream end.
-  const pending = new Map<number, { id: string | undefined; name: string | undefined; args: string }>();
+  const pending = new Map<
+    number,
+    { id: string | undefined; name: string | undefined; args: string }
+  >();
 
   const accumulate = (callsRaw: unknown): void => {
     if (!Array.isArray(callsRaw)) return;
@@ -172,7 +176,10 @@ export async function streamChat(
       // extend arguments. Setting once guards against providers that repeat.
       if (cur.id === undefined) cur.id = nonEmptyStr(c, 'id');
       if (cur.name === undefined) cur.name = nonEmptyStr(fn, 'name');
-      const args = Object.hasOwn(fn, 'arguments') && typeof fn['arguments'] === 'string' ? fn['arguments'] : '';
+      const args =
+        Object.hasOwn(fn, 'arguments') && typeof fn['arguments'] === 'string'
+          ? fn['arguments']
+          : '';
       if (args !== '') cur.args += args;
       pending.set(slot, cur);
     }
@@ -270,7 +277,8 @@ export async function streamChat(
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages.map((m) => {
-      if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content };
+      if (m.role === 'tool')
+        return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content };
       if (m.role === 'assistant') {
         const out: Record<string, unknown> = { role: 'assistant', content: m.content };
         if (m.tool_calls !== undefined && m.tool_calls.length > 0) {

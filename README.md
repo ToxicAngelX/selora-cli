@@ -3,9 +3,17 @@
 Open-source command-line client for the [Selora API gateway](https://api.selora.lol).
 Log in, check your balance and usage, list models, manage API keys, chat
 with models — streaming — and run a **permission-gated agent** that reads,
-writes, and edits your files, runs commands, and drives git, straight from
-the terminal. It is an independent codebase: no website or IDE required, and
-nothing is sent anywhere except the Selora API itself.
+writes, moves, and removes your files, runs commands, drives git, and
+searches the web, straight from the terminal. It is an independent codebase:
+no website or IDE required.
+
+v0.3 gives the CLI a **galaxy-themed terminal UI** (Claude-Code-style): a
+starfield logo and info box on startup, a `❯` prompt with a status footer,
+streaming markdown rendering, `● / ⎿` tool-call display, colored diffs,
+a spinner, and an arrow-key permission menu — with three themes
+(`galaxy`, `nebula`, `mono`) and honest NO_COLOR/non-TTY/`--json` fallbacks.
+Ask it things like _"create a folder called Projects on my desktop"_ and it
+does it, no shell required.
 
 ## Requirements
 
@@ -72,10 +80,11 @@ The key is validated against the API **before** anything is stored.
 | `selora models`                       | list available models with pricing                                            | [models.md](docs/commands/models.md)         |
 | `selora model [id]`                   | show the default model, or set it to `<id>`                                   | [model.md](docs/commands/model.md)           |
 | `selora keys [list\|create\|revoke]`  | manage API keys (default: list)                                               | [keys.md](docs/commands/keys.md)             |
-| `selora chat`                         | chat with a model in an interactive streaming session                         | [chat.md](docs/commands/chat.md)             |
-| `selora run "<prompt>"`               | one-shot streaming completion with the agent tool loop (permissions gated)     | [run.md](docs/commands/run.md)               |
+| `selora chat`                         | interactive agent REPL: tools, galaxy UI, permission menus                    | [chat.md](docs/commands/chat.md)             |
+| `selora run "<prompt>"`               | one-shot streaming completion with the agent tool loop (permissions gated)    | [run.md](docs/commands/run.md)               |
 | `selora sessions [list\|show\|rm]`    | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
 | `selora init`                         | write a project-local selora.json (model + agent context globs)               | [init.md](docs/commands/init.md)             |
+| `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, mono)                               | [theme.md](docs/commands/theme.md)           |
 | `selora completion [bash\|zsh\|fish]` | print a shell completion script                                               | [completion.md](docs/commands/completion.md) |
 
 Global flags on every command: `--json` (machine-readable output only),
@@ -130,10 +139,21 @@ selora model gpt-5.2-mini     # sets the stored default (verified against /v1/mo
 
 Per-invocation: `selora chat --model <id>`, `selora run --model <id>`, or a
 project `selora.json` (see below) for `run`.
+
 ## Privacy
 
-- **Zero telemetry.** No analytics, no crash reporting, no usage pings. The
-  CLI talks to exactly one host: the Selora gateway.
+- **Zero telemetry.** No analytics, no crash reporting, no usage pings. By
+  default the CLI talks to exactly one host: the Selora gateway.
+- **The web tools are the one deliberate exception, and they are opt-in.**
+  `web_search` / `web_fetch` (agent tools) send your query or a URL to a
+  search provider / the page's host — never the Selora gateway. They are
+  disabled until you enable them (`SELORA_WEB_TOOLS=1`,
+  `"agent": {"webTools": true}` in selora.json, or `"webTools": true` in the
+  global config), and their first attempted use prints that notice with the
+  enable instructions. The search provider is pluggable
+  (`SELORA_SEARCH_PROVIDER`: `brave` or `tavily`, keys via
+  `SELORA_SEARCH_API_KEY`; default is the keyless DuckDuckGo HTML endpoint).
+  The CLI never sends your files, history, or keys anywhere else.
 - **Keys are never logged.** All debug output passes through a single
   redaction chokepoint before printing; the Authorization header is never
   printed. The one deliberate exception is `selora keys create`, whose entire
@@ -156,7 +176,8 @@ Global config (stored, mode 0600):
 | macOS    | `~/.config/selora/config.json` (the CLI uses the XDG path on macOS too)    |
 | Windows  | `%APPDATA%\selora\config.json`                                             |
 
-Fields: `apiUrl`, `apiKey`, `defaultModel` — all optional; environment
+Fields: `apiUrl`, `apiKey`, `defaultModel`, `theme` (`galaxy` |
+`nebula` | `mono`), `webTools` (boolean) — all optional; environment
 variables and flags override them.
 
 Project config: `selora init` writes a `selora.json` in the current directory
@@ -167,7 +188,7 @@ section tunes the loop:
 
 ```json
 {
-  "agent": { "maxTurns": 25, "allowWindowsCmd": false }
+  "agent": { "maxTurns": 25, "allowWindowsCmd": false, "webTools": true }
 }
 ```
 

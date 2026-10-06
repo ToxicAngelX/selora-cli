@@ -71,7 +71,11 @@ export const globTool: Tool = {
   run: async (input, ctx) => {
     const r = rec(input);
     if (r === null) return badShape('glob: input must be an object');
-    if (!Object.hasOwn(r, 'pattern') || typeof r['pattern'] !== 'string' || r['pattern'].trim() === '') {
+    if (
+      !Object.hasOwn(r, 'pattern') ||
+      typeof r['pattern'] !== 'string' ||
+      r['pattern'].trim() === ''
+    ) {
       return badShape('glob: pattern must be a non-empty string');
     }
     const pattern = (r['pattern'] as string).trim();
@@ -104,8 +108,7 @@ export const globTool: Tool = {
     const notes: string[] = [];
     if (truncated) notes.push(`result list capped at ${GLOB_RESULT_CAP}`);
     if (walk.truncated) notes.push(`directory walk capped at 5000 entries — partial view`);
-    const content =
-      matches.length > 0 ? matches.join('\n') : `(no files match ${pattern})`;
+    const content = matches.length > 0 ? matches.join('\n') : `(no files match ${pattern})`;
     return {
       ok: true,
       summary: `${matches.length} file${matches.length === 1 ? '' : 's'} match ${pattern}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`,
@@ -153,7 +156,9 @@ export const grepTool: Tool = {
       return badShape('grep: glob must be a non-empty string when given');
     }
     const globPattern =
-      Object.hasOwn(r, 'glob') && typeof r['glob'] === 'string' ? (r['glob'] as string).trim() : undefined;
+      Object.hasOwn(r, 'glob') && typeof r['glob'] === 'string'
+        ? (r['glob'] as string).trim()
+        : undefined;
     const globRe = globPattern !== undefined ? globToRegExp(globPattern) : undefined;
     const base = resolveSearchPath(ctx.cwd, Object.hasOwn(r, 'path') ? r['path'] : undefined);
     if ('error' in base) return badShape(`grep: ${base.error}`);
@@ -182,7 +187,11 @@ export const grepTool: Tool = {
         skippedLarge += 1;
         continue;
       }
-      if (globRe !== undefined && !globRe.test(entry.rel) && !globRe.test(entry.rel.split('/').pop() ?? '')) {
+      if (
+        globRe !== undefined &&
+        !globRe.test(entry.rel) &&
+        !globRe.test(entry.rel.split('/').pop() ?? '')
+      ) {
         continue;
       }
       let text: string;
@@ -203,7 +212,8 @@ export const grepTool: Tool = {
             capped = true;
             break;
           }
-          const lineText = lines[i]!.length > GREP_LINE_CAP ? `${lines[i]!.slice(0, GREP_LINE_CAP)}…` : lines[i]!;
+          const lineText =
+            lines[i]!.length > GREP_LINE_CAP ? `${lines[i]!.slice(0, GREP_LINE_CAP)}…` : lines[i]!;
           matches.push(`${display}:${i + 1}:${lineText}`);
         }
       }
@@ -211,11 +221,12 @@ export const grepTool: Tool = {
 
     const notes: string[] = [];
     if (capped) notes.push(`matches capped at ${GREP_MATCH_CAP}`);
-    if (skippedLarge > 0) notes.push(`${skippedLarge} file${skippedLarge === 1 ? '' : 's'} over 256 KB skipped`);
-    if (skippedBinary > 0) notes.push(`${skippedBinary} binary file${skippedBinary === 1 ? '' : 's'} skipped`);
+    if (skippedLarge > 0)
+      notes.push(`${skippedLarge} file${skippedLarge === 1 ? '' : 's'} over 256 KB skipped`);
+    if (skippedBinary > 0)
+      notes.push(`${skippedBinary} binary file${skippedBinary === 1 ? '' : 's'} skipped`);
     if (walk.truncated) notes.push('directory walk capped at 5000 entries — partial view');
-    const content =
-      matches.length > 0 ? matches.join('\n') : `(no matches for /${pattern}/)`;
+    const content = matches.length > 0 ? matches.join('\n') : `(no matches for /${pattern}/)`;
     return {
       ok: true,
       summary: `${matches.length} match${matches.length === 1 ? '' : 'es'} in ${filesSearched} file${filesSearched === 1 ? '' : 's'}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`,

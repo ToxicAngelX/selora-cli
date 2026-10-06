@@ -1,21 +1,25 @@
 /**
- * File tools: read_file, write_file, edit_file. All paths go through the
- * sandbox (agent/paths.ts) — root containment, symlink re-check, 256 KB read
- * cap, exclude globs. Input is untrusted model JSON: every field is checked
- * with Object.hasOwn before use; a bad shape is an honest {ok:false} result
- * that goes back to the model, never a crash.
+ * File tools: read_file, write_file, edit_file. v0.3 paths resolve through
+ * agent/userPaths.ts — `~`, env vars, and the desktop/downloads/documents
+ * aliases expand, and a path OUTSIDE the project root is no longer a hard
+ * refusal: the dry run reports it as `outside` so the permission gate can ask
+ * the user (showing the absolute path); the real run executes only when the
+ * resolved path sits inside a session-granted directory. Inside-root paths
+ * keep the full v0.2 sandbox (symlink realpath re-checks) and the project's
+ * context.exclude globs; the 256 KB caps apply everywhere.
+ *
+ * Input is untrusted model JSON: every field is checked with Object.hasOwn
+ * before use; a bad shape is an honest {ok:false} result that goes back to
+ * the model, never a crash. edit_file (v0.3) requires the find string to
+ * match UNIQUELY — an ambiguous edit is refused with the occurrence count —
+ * and both its dry run and its result carry before/after for a colored diff.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Tool, ToolResult } from '../tool.js';
-import {
-  effectiveExcludeGlobs,
-  isExcludedRel,
-  MAX_TOOL_FILE_BYTES,
-  resolveToolPath,
-  statPath,
-} from '../paths.js';
+import { effectiveExcludeGlobs, isExcludedRel, MAX_TOOL_FILE_BYTES, statPath } from '../paths.js';
+import { isInsideAny, resolveUserPath } from '../userPaths.js';
 
 const READ_DEFAULT_LINES = 200;
 const READ_MAX_LINES = 10_000;
@@ -32,6 +36,44 @@ function badShape(message: string): ToolResult {
   return { ok: false, summary: message };
 }
 
+/**
+ * Resolve a tool input path for this context. Three outcomes:
+ *  - 'error'      — refused before anything happens (bad shape, NUL, …)
+ *  - 'outside'    — outside the project root AND not granted this session;
+ *                   dry runs report it (permission gate asks), real runs fail
+ *  - 'resolved'   — inside the root (rel present) or an granted outside dir
+ */
+type PathOutcome =
+  | { kind: 'error'; error: string }
+  | { kind: 'outside'; abs: string; display: string }
+  | { kind: 'resolved'; abs: string; display: string; rel: string };
+
+function resolveForTool(
+  ctx: { cwd: string; outsideDirs?: readonly string[] },
+  input: unknown,
+): PathOutcome {
+  const res = resolveUserPath(ctx.cwd, input);
+  if (!res.ok) return { kind: 'error', error: res.error };
+  if (res.inside) return { kind: 'resolved', abs: res.abs, display: res.rel, rel: res.rel };
+  if (isInsideAny(ctx.outsideDirs ?? [], res.abs)) {
+    return { kind: 'resolved', abs: res.abs, display: res.abs, rel: res.abs };
+  }
+  return { kind: 'outside', abs: res.abs, display: res.abs };
+}
+
+/** The outside-pending dry-run/real-run result pair every file tool shares. */
+function outsideResults(tool: string, display: string, abs: string, dryRun: boolean): ToolResult {
+  if (dryRun) {
+    return {
+      ok: true,
+      summary: `would use ${display} — outside the project root`,
+      preview: `path outside the project root (needs your approval):\n${abs}`,
+      outside: { abs },
+    };
+  }
+  return badShape(`${tool}: ${abs} is outside the project root and access was not granted`);
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -46,14 +88,23 @@ function capPreview(text: string): string {
 export const readFileTool: Tool = {
   name: 'read_file',
   description:
-    'Read a text file from the project. Returns the first lines by default ' +
-    `(default ${READ_DEFAULT_LINES}, max ${READ_MAX_LINES} via max_lines). ` +
-    'Files over 256 KB are refused (their size is reported).',
+    'Read a text file. Returns lines starting at start_line (default 1), ' +
+    `${READ_DEFAULT_LINES} lines by default (max ${READ_MAX_LINES} via max_lines). ` +
+    'Paths may use ~, env vars ($HOME), or the aliases desktop/downloads/documents; ' +
+    'paths outside the project root need user approval. Files over 256 KB are refused ' +
+    '(their size is reported).',
   kind: 'read',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path, relative to the project root' },
+      path: {
+        type: 'string',
+        description: 'File path (project-relative, ~, or an alias like desktop)',
+      },
+      start_line: {
+        type: 'integer',
+        description: `First line to return, 1-based (1-${READ_MAX_LINES}, default 1)`,
+      },
       max_lines: {
         type: 'integer',
         description: `How many lines to return (1-${READ_MAX_LINES}, default ${READ_DEFAULT_LINES})`,
@@ -70,6 +121,14 @@ export const readFileTool: Tool = {
     const r = rec(input);
     if (r === null) return badShape('read_file: input must be an object');
     if (!Object.hasOwn(r, 'path')) return badShape('read_file: missing required field "path"');
+    let startLine = 1;
+    if (Object.hasOwn(r, 'start_line')) {
+      const v = r['start_line'];
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > READ_MAX_LINES) {
+        return badShape(`read_file: start_line must be an integer between 1 and ${READ_MAX_LINES}`);
+      }
+      startLine = v;
+    }
     let maxLines = READ_DEFAULT_LINES;
     if (Object.hasOwn(r, 'max_lines')) {
       const v = r['max_lines'];
@@ -78,36 +137,52 @@ export const readFileTool: Tool = {
       }
       maxLines = v;
     }
-    const resolved = resolveToolPath(ctx.cwd, r['path']);
-    if (!resolved.ok) return badShape(`read_file: ${resolved.error}`);
+    const p = resolveForTool(ctx, r['path']);
+    if (p.kind === 'error') return badShape(`read_file: ${p.error}`);
+    if (p.kind === 'outside') return outsideResults('read_file', p.display, p.abs, ctx.dryRun);
     const exclude = effectiveExcludeGlobs(ctx.cwd);
-    if (isExcludedRel(resolved.rel, exclude)) {
-      return badShape(`read_file: ${resolved.rel} is excluded by the project context globs`);
+    if (p.rel !== p.abs && isExcludedRel(p.rel, exclude)) {
+      return badShape(`read_file: ${p.rel} is excluded by the project context globs`);
     }
-    const st = statPath(resolved.abs);
-    if (st === null) return badShape(`read_file: no such file: ${resolved.rel}`);
-    if (!st.isFile) return badShape(`read_file: not a file: ${resolved.rel}`);
+    const st = statPath(p.abs);
+    if (st === null) return badShape(`read_file: no such file: ${p.display}`);
+    if (!st.isFile) return badShape(`read_file: not a file: ${p.display}`);
     if (st.size > MAX_TOOL_FILE_BYTES) {
       return badShape(
-        `read_file: ${resolved.rel} is ${formatBytes(st.size)} — over the ${formatBytes(MAX_TOOL_FILE_BYTES)} tool file limit`,
+        `read_file: ${p.display} is ${formatBytes(st.size)} — over the ${formatBytes(MAX_TOOL_FILE_BYTES)} tool file limit`,
       );
     }
     let text: string;
     try {
-      text = readFileSync(resolved.abs, 'utf8');
+      text = readFileSync(p.abs, 'utf8');
     } catch (err) {
-      return badShape(`read_file: cannot read ${resolved.rel}: ${errText(err)}`);
+      return badShape(`read_file: cannot read ${p.display}: ${errText(err)}`);
     }
     const lines = text.split('\n');
     // A trailing newline yields a final empty element — it is not a line.
     const realLines = text.endsWith('\n') ? lines.length - 1 : lines.length;
-    const shown = lines.slice(0, maxLines);
-    const truncated = realLines > maxLines;
+    if (startLine > realLines) {
+      return badShape(
+        `read_file: ${p.display} has ${realLines} line${realLines === 1 ? '' : 's'} — start_line ${startLine} is past the end`,
+      );
+    }
+    const from = startLine - 1;
+    const shown = lines.slice(from, from + maxLines);
+    const truncated = realLines - from > maxLines;
     const body =
-      shown.join('\n') + (truncated ? `\n(… ${realLines - maxLines} more lines — pass max_lines to read more)` : '');
+      shown.join('\n') +
+      (truncated
+        ? `\n(… ${realLines - from - maxLines} more lines — pass max_lines to read more)`
+        : '');
+    // The default read keeps the v0.2 summary shape (tests + muscle memory);
+    // a ranged read says the range.
+    const range =
+      startLine === 1
+        ? `${realLines} line${realLines === 1 ? '' : 's'}`
+        : `lines ${startLine}-${startLine + shown.length - 1} of ${realLines}`;
     return {
       ok: true,
-      summary: `read ${resolved.rel} (${realLines} line${realLines === 1 ? '' : 's'}, ${formatBytes(st.size)}${truncated ? ', truncated' : ''})`,
+      summary: `read ${p.display} (${range}, ${formatBytes(st.size)}${truncated ? ', truncated' : ''})`,
       content: body,
     };
   },
@@ -116,13 +191,18 @@ export const readFileTool: Tool = {
 export const writeFileTool: Tool = {
   name: 'write_file',
   description:
-    'Write a file (creates parent directories). The permission prompt shows ' +
-    'the exact content before anything is written. Overwrites an existing file.',
+    'Write a file, creating parent directories (works for new files and full ' +
+    'overwrites). The permission prompt shows the exact content before ' +
+    'anything is written. Paths may use ~, env vars, or the aliases ' +
+    'desktop/downloads/documents; paths outside the project root need user approval.',
   kind: 'write',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path, relative to the project root' },
+      path: {
+        type: 'string',
+        description: 'File path (project-relative, ~, or an alias like desktop)',
+      },
       content: { type: 'string', description: 'The full file content to write' },
     },
     required: ['path', 'content'],
@@ -139,35 +219,37 @@ export const writeFileTool: Tool = {
     if (typeof r['path'] !== 'string' || r['path'].trim() === '') {
       return badShape('write_file: path must be a non-empty string');
     }
-    if (!Object.hasOwn(r, 'content')) return badShape('write_file: missing required field "content"');
+    if (!Object.hasOwn(r, 'content'))
+      return badShape('write_file: missing required field "content"');
     if (typeof r['content'] !== 'string') {
       return badShape('write_file: content must be a string');
     }
     const content = r['content'] as string;
-    const resolved = resolveToolPath(ctx.cwd, r['path']);
-    if (!resolved.ok) return badShape(`write_file: ${resolved.error}`);
     if (content.length > MAX_TOOL_FILE_BYTES) {
       return badShape(
         `write_file: content is ${formatBytes(content.length)} — over the ${formatBytes(MAX_TOOL_FILE_BYTES)} tool limit`,
       );
     }
-    const existed = statPath(resolved.abs) !== null;
+    const p = resolveForTool(ctx, r['path']);
+    if (p.kind === 'error') return badShape(`write_file: ${p.error}`);
+    if (p.kind === 'outside') return outsideResults('write_file', p.display, p.abs, ctx.dryRun);
+    const existed = statPath(p.abs) !== null;
     if (ctx.dryRun) {
       return {
         ok: true,
-        summary: `would ${existed ? 'overwrite' : 'write'} ${resolved.rel} (${formatBytes(content.length)})`,
-        preview: `${existed ? 'overwrite' : 'write'} ${resolved.rel} — full content:\n${capPreview(content)}`,
+        summary: `would ${existed ? 'overwrite' : 'write'} ${p.display} (${formatBytes(content.length)})`,
+        preview: `${existed ? 'overwrite' : 'write'} ${p.display} — full content:\n${capPreview(content)}`,
       };
     }
     try {
-      mkdirSync(dirname(resolved.abs), { recursive: true });
-      writeFileSync(resolved.abs, content, 'utf8');
+      mkdirSync(dirname(p.abs), { recursive: true });
+      writeFileSync(p.abs, content, 'utf8');
     } catch (err) {
-      return badShape(`write_file: cannot write ${resolved.rel}: ${errText(err)}`);
+      return badShape(`write_file: cannot write ${p.display}: ${errText(err)}`);
     }
     return {
       ok: true,
-      summary: `${existed ? 'overwrote' : 'wrote'} ${resolved.rel} (${formatBytes(content.length)})`,
+      summary: `${existed ? 'overwrote' : 'wrote'} ${p.display} (${formatBytes(content.length)})`,
     };
   },
 };
@@ -175,14 +257,21 @@ export const writeFileTool: Tool = {
 export const editFileTool: Tool = {
   name: 'edit_file',
   description:
-    'Edit a file by replacing the FIRST occurrence of a find string with a ' +
-    'replacement. The permission prompt shows the change with surrounding context.',
+    'Edit a file by replacing a find string with a replacement. The find ' +
+    'string must match EXACTLY ONCE in the file — an ambiguous match is ' +
+    'refused with the occurrence count (include more surrounding lines to ' +
+    'make it unique). The permission prompt shows the change as a diff with ' +
+    'context. Paths may use ~, env vars, or the desktop/downloads/documents ' +
+    'aliases; paths outside the project root need user approval.',
   kind: 'write',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path, relative to the project root' },
-      find: { type: 'string', description: 'The exact text to find (first occurrence)' },
+      path: {
+        type: 'string',
+        description: 'File path (project-relative, ~, or an alias like desktop)',
+      },
+      find: { type: 'string', description: 'The exact text to find (must be unique in the file)' },
       replace: { type: 'string', description: 'The replacement text' },
     },
     required: ['path', 'find', 'replace'],
@@ -208,45 +297,62 @@ export const editFileTool: Tool = {
     const find = r['find'] as string;
     if (find === '') return badShape('edit_file: find must not be empty');
     const replace = r['replace'] as string;
-    const resolved = resolveToolPath(ctx.cwd, r['path']);
-    if (!resolved.ok) return badShape(`edit_file: ${resolved.error}`);
-    const st = statPath(resolved.abs);
-    if (st === null) return badShape(`edit_file: no such file: ${resolved.rel}`);
-    if (!st.isFile) return badShape(`edit_file: not a file: ${resolved.rel}`);
+    const p = resolveForTool(ctx, r['path']);
+    if (p.kind === 'error') return badShape(`edit_file: ${p.error}`);
+    if (p.kind === 'outside') return outsideResults('edit_file', p.display, p.abs, ctx.dryRun);
+    const exclude = effectiveExcludeGlobs(ctx.cwd);
+    if (p.rel !== p.abs && isExcludedRel(p.rel, exclude)) {
+      return badShape(`edit_file: ${p.rel} is excluded by the project context globs`);
+    }
+    const st = statPath(p.abs);
+    if (st === null) return badShape(`edit_file: no such file: ${p.display}`);
+    if (!st.isFile) return badShape(`edit_file: not a file: ${p.display}`);
     if (st.size > MAX_TOOL_FILE_BYTES) {
       return badShape(
-        `edit_file: ${resolved.rel} is ${formatBytes(st.size)} — over the ${formatBytes(MAX_TOOL_FILE_BYTES)} tool file limit`,
+        `edit_file: ${p.display} is ${formatBytes(st.size)} — over the ${formatBytes(MAX_TOOL_FILE_BYTES)} tool file limit`,
       );
     }
     let text: string;
     try {
-      text = readFileSync(resolved.abs, 'utf8');
+      text = readFileSync(p.abs, 'utf8');
     } catch (err) {
-      return badShape(`edit_file: cannot read ${resolved.rel}: ${errText(err)}`);
+      return badShape(`edit_file: cannot read ${p.display}: ${errText(err)}`);
     }
-    const at = text.indexOf(find);
-    if (at < 0) {
+    // Unique-match contract: count occurrences across the whole file.
+    let occurrences = 0;
+    for (let at = text.indexOf(find); at >= 0; at = text.indexOf(find, at + find.length)) {
+      occurrences += 1;
+    }
+    if (occurrences === 0) {
       const lineCount = text.split('\n').length;
       return badShape(
-        `edit_file: find text not found in ${resolved.rel} (file has ${lineCount} lines)`,
+        `edit_file: find text not found in ${p.display} (file has ${lineCount} lines)`,
       );
     }
+    if (occurrences > 1) {
+      return badShape(
+        `edit_file: find text matches ${occurrences} times in ${p.display} — include more context so it matches exactly once`,
+      );
+    }
+    const at = text.indexOf(find);
+    const next = text.slice(0, at) + replace + text.slice(at + find.length);
     if (ctx.dryRun) {
       return {
         ok: true,
-        summary: `would replace 1 occurrence in ${resolved.rel}`,
+        summary: `would replace 1 occurrence in ${p.display}`,
         preview: editPreview(text, at, find, replace),
+        diff: { before: text, after: next },
       };
     }
-    const next = text.slice(0, at) + replace + text.slice(at + find.length);
     try {
-      writeFileSync(resolved.abs, next, 'utf8');
+      writeFileSync(p.abs, next, 'utf8');
     } catch (err) {
-      return badShape(`edit_file: cannot write ${resolved.rel}: ${errText(err)}`);
+      return badShape(`edit_file: cannot write ${p.display}: ${errText(err)}`);
     }
     return {
       ok: true,
-      summary: `edited ${resolved.rel}: replaced 1 occurrence (${find.length} → ${replace.length} chars)`,
+      summary: `edited ${p.display}: replaced 1 occurrence (${find.length} → ${replace.length} chars)`,
+      diff: { before: text, after: next },
     };
   },
 };

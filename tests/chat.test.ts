@@ -174,8 +174,7 @@ describe('streamChat', () => {
         name: 'write_file',
         arguments: '{"path":"out.txt","content":"hi"}',
       },
-      { id: 'call_PAR2', name: 'read_file', arguments: '{"path":"src/index.ts"}',
-      },
+      { id: 'call_PAR2', name: 'read_file', arguments: '{"path":"src/index.ts"}' },
     ]);
   });
 
@@ -478,7 +477,7 @@ describe('chat REPL', () => {
     // reasoning went to stderr, dim gray channel
     expect(cap.err()).toContain('(thinking about it)');
     // the gray prompt was written for each turn
-    expect(cap.err().split('> ').length - 1).toBe(4);
+    expect(cap.err().split('❯ ').length - 1).toBe(4);
     // model switch verified against /v1/models/:id
     expect(out).toContain('✓ Switched to gpt-5.2-mini');
     const mine = server.requests.slice(before);
@@ -593,8 +592,13 @@ describe('chat REPL', () => {
         },
       },
     );
-    // wait until the first delta actually rendered, then "press Ctrl+C"
-    await until(() => cap.out().includes('Star'), 'first delta rendered');
+    // wait until the request is actually in flight (markdown rendering is
+    // line-buffered, so a partial first line legitimately renders nothing),
+    // then "press Ctrl+C"
+    await until(
+      () => server.requests.slice(before).some((rq) => rq.path === '/v1/chat/completions'),
+      'chat request started',
+    );
     expect(typeof interrupt).toBe('function');
     interrupt!();
     await session;
@@ -658,7 +662,7 @@ describe('chat REPL', () => {
     expect(text).toContain('Unknown command /wat — /help lists commands.');
     expect(text).toContain('Current model: glm-5.3-flash (GLM 5.3 Flash)');
     // 5 prompts were drawn (empty, /wat, /model, + none for /exit)
-    expect(cap.err().split('> ').length - 1).toBeGreaterThanOrEqual(4);
+    expect(cap.err().split('❯ ').length - 1).toBeGreaterThanOrEqual(4);
     expect(process.exitCode).toBeUndefined();
   });
 

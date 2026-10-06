@@ -140,7 +140,10 @@ describe('session store', () => {
       const newer = {
         ...newSession('newer', 'm'),
         updatedAt: '2026-10-05T11:00:00.000Z',
-        messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }],
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'yo' },
+        ],
       };
       mkdirSync(sessionsDir(root), { recursive: true });
       writeFileSync(sessionPath(root, 'older'), JSON.stringify(older), 'utf8');
@@ -199,7 +202,10 @@ describe('selora sessions', () => {
     const root = tempProject();
     try {
       const s = newSession('j', 'm1');
-      s.messages = [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a' }];
+      s.messages = [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: 'a' },
+      ];
       saveSession(root, s);
       const { io, cap } = capturedIo();
       await runSessions(ctx(io, true), 'list', undefined, { cwd: root });
@@ -231,7 +237,7 @@ describe('selora sessions', () => {
               id: 'call_9',
               type: 'function',
               function: { name: 'read_file', arguments: '{"path":".env"}' },
-          },
+            },
           ],
         },
         { role: 'tool', tool_call_id: 'call_9', content: 'sk-gw-ANOTHERKEY000000' },
@@ -263,7 +269,10 @@ describe('selora sessions', () => {
       saveSession(root, s);
       const { io, cap } = capturedIo();
       await runSessions(ctx(io, true), 'show', 'full', { cwd: root });
-      const parsed = JSON.parse(cap.out.join('')) as { ok: boolean; messages: Array<{ content: string }> };
+      const parsed = JSON.parse(cap.out.join('')) as {
+        ok: boolean;
+        messages: Array<{ content: string }>;
+      };
       expect(parsed.ok).toBe(true);
       expect(parsed.messages[0]!.content).toHaveLength(500);
     } finally {

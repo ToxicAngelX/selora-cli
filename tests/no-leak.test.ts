@@ -254,11 +254,7 @@ describe('no-leak (hard rule: credentials never appear in output, even in debug 
     const dir = mkdtempSync(join(tmpdir(), 'selora-noleak-'));
     try {
       mkdirSync(join(dir, 'src'), { recursive: true });
-      writeFileSync(
-        join(dir, 'src', 'index.ts'),
-        `const key = '${REAL_LOOKING_KEY}';\n`,
-        'utf8',
-      );
+      writeFileSync(join(dir, 'src', 'index.ts'), `const key = '${REAL_LOOKING_KEY}';\n`, 'utf8');
       let calls = 0;
       server.setHandler((req) => {
         if (req.method === 'POST' && req.path === '/v1/chat/completions') {

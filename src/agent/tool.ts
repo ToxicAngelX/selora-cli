@@ -23,6 +23,14 @@ export type ToolKind = 'read' | 'write' | 'exec';
 export interface ToolContext {
   /** The project root — also the sandbox root every path is contained in. */
   cwd: string;
+  /**
+   * v0.3: directories the user approved for OUTSIDE-the-project access this
+   * session (absolute, realpath-resolved). A tool resolving a path outside
+   * the project root may proceed only when the resolved path is inside one
+   * of these; otherwise it returns `outside` from its dry run so the loop
+   * can ask. Absent/empty = no outside access granted yet.
+   */
+  outsideDirs?: readonly string[];
 }
 
 export interface ToolResult {
@@ -41,6 +49,19 @@ export interface ToolResult {
    * leave this to the summary line.
    */
   preview?: string;
+  /**
+   * v0.3: the before/after of an edit, for a COLORED diff in the permission
+   * prompt and the tool-result display. Dry runs of edit tools set this
+   * (simulating the change); real runs may set it too.
+   */
+  diff?: { before: string; after: string };
+  /**
+   * v0.3 (dry runs only): the tool resolved a path OUTSIDE the project root
+   * and outside every session-allowed directory. The loop turns this into the
+   * outside-access permission prompt (showing the absolute path) instead of
+   * the normal tool prompt.
+   */
+  outside?: { abs: string };
 }
 
 export interface ToolParameters {
@@ -57,6 +78,12 @@ export interface Tool {
   readonly parameters: ToolParameters;
   /** Human label for the permission prompt, e.g. read_file(src/index.ts). */
   readonly permissionLabel: (input: unknown) => string;
+  /**
+   * v0.3: when true, an `a` (always this session) answer is NEVER remembered
+   * for this tool — every call prompts, even in always-allow mode. Used by
+   * destructive tools (remove) where one approval must not blanket the next.
+   */
+  readonly neverAutoAllow?: boolean;
   /**
    * Executes, or (dryRun) describes what would happen. Never called without
    * the permission gate — the caller must have asked the user first.

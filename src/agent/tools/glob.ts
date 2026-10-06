@@ -150,8 +150,7 @@ export async function walkTree(opts: WalkOptions): Promise<WalkResult> {
 
   // A directory is pruned when anything below it is excluded — tested with a
   // child sentinel so `**/node_modules/**` also prunes the bare `node_modules`.
-  const dirExcluded = (relDir: string): boolean =>
-    excludeRes.some((re) => re.test(`${relDir}/x`));
+  const dirExcluded = (relDir: string): boolean => excludeRes.some((re) => re.test(`${relDir}/x`));
 
   async function walk(absDir: string, relDir: string): Promise<void> {
     if (truncated) return;

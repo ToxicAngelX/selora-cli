@@ -255,14 +255,23 @@ describe('run', () => {
     // v0.2: run attaches the built-in tool definitions (OpenAI dialect)
     expect(body['tool_choice']).toBe('auto');
     const tools = body['tools'] as Array<Record<string, unknown>>;
-    const toolNames = (tools.map((t) => (t['function'] as Record<string, unknown>)['name']) as string[]);
+    const toolNames = tools.map(
+      (t) => (t['function'] as Record<string, unknown>)['name'],
+    ) as string[];
     expect(toolNames).toEqual([
       'read_file',
       'write_file',
       'edit_file',
+      'list_dir',
+      'create_dir',
+      'move',
+      'copy',
+      'remove',
       'glob',
       'grep',
       'run_command',
+      'web_search',
+      'web_fetch',
       'git_status',
       'git_diff',
       'git_log',
@@ -320,7 +329,9 @@ describe('run', () => {
       // the v0.1 gray line is GONE — this is real execution now
       expect(err).not.toContain('agent mode not implemented');
       // exactly two chat requests; the second carried the tool echo + result
-      const chatReqs = server.requests.slice(before).filter((r) => r.path === '/v1/chat/completions');
+      const chatReqs = server.requests
+        .slice(before)
+        .filter((r) => r.path === '/v1/chat/completions');
       expect(chatReqs).toHaveLength(2);
       const second = JSON.parse(chatReqs[1]!.body) as {
         messages: Array<Record<string, unknown>>;
@@ -345,7 +356,7 @@ describe('run', () => {
         content: 'Permission denied by user.',
       });
       // the follow-up request carries the tool definitions again
-      expect((JSON.parse(chatReqs[1]!.body) as { tools: unknown[] }).tools.length).toBe(11);
+      expect((JSON.parse(chatReqs[1]!.body) as { tools: unknown[] }).tools.length).toBe(18);
       expect(process.exitCode).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });

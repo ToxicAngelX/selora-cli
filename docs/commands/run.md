@@ -41,14 +41,25 @@ the model streams again. Bounded by the turn cap (25 by default), with a
 
 ### Flags
 
-- `--safe` — restrict the agent to the read-only tools (`read_file`, `glob`,
-  `grep`, `git_status`, `git_diff`, `git_log`). Write/exec tools are not even
-  offered to the model.
+- `--safe` — restrict the agent to the read-only tools (`read_file`,
+  `list_dir`, `glob`, `grep`, `web_search`, `web_fetch`, `git_status`,
+  `git_diff`, `git_log`). Write/exec tools are not even offered to the model.
 - `--yes` — auto-approve every tool the (possibly `--safe`) toolset allows,
-  non-interactively. Without a TTY and without `--yes`, prompts deny safely.
+  non-interactively (including implicit in-memory grants for outside-root
+  paths). Without a TTY and without `--yes`, prompts deny safely.
 - `--max-turns <n>` — turn cap, 1–200 (default: the project `selora.json`
   `agent.maxTurns`, else 25). Invalid values exit 1 with the exact rule.
 - `--session <name>` — resume/create a named conversation session (below).
+
+## v0.3 display
+
+On a TTY, `run` renders tool calls the rich way — `● Name(args)` headers,
+indented `⎿` result lines with content collapsed to 5 lines, colored
+red/green diffs for `edit_file` (also inside the permission prompt), and the
+arrow-key permission menu. Non-TTY (pipes, CI) keeps the v0.2 gray
+`→ tool(...)` activity lines and the line-based prompt, byte-for-byte;
+`--json` output is unchanged. The theme follows `selora theme` (galaxy by
+default) and degrades honestly (NO_COLOR, 256/16-color terminals).
 
 ## Model resolution
 
@@ -96,7 +107,14 @@ Streaming text and machine output do not mix: in `--json` mode the reply is
   "content": "Hello, world!",
   "finishReason": "stop",
   "turns": 2,
-  "tools": [{ "tool": "read_file", "label": "read_file(src/index.ts)", "ok": true, "summary": "read src/index.ts (1 line, 20 B)" }],
+  "tools": [
+    {
+      "tool": "read_file",
+      "label": "read_file(src/index.ts)",
+      "ok": true,
+      "summary": "read src/index.ts (1 line, 20 B)"
+    }
+  ],
   "usage": { "promptTokens": 5021, "completionTokens": 1274, "totalTokens": 6295 },
   "charge": "0.020234"
 }
