@@ -44,6 +44,28 @@ const writeReq: PermissionRequest = {
 };
 
 describe('interactive asker', () => {
+  it('close() releases the owned readline; a shared line source has no close', () => {
+    // owning asker (run): close exists and closes the readline over stdin
+    const owning = createInteractiveAsker({
+      stdin: Readable.from([]),
+      isTTY: false,
+      err: () => {},
+    });
+    expect(typeof owning.close).toBe('function');
+    owning.close!();
+    // shared line source (chat): nothing owned → no close
+    const shared = createInteractiveAsker({
+      stdin: Readable.from([]),
+      isTTY: false,
+      err: () => {},
+      nextLine: () => Promise.resolve('y'),
+    });
+    expect(shared.close).toBeUndefined();
+    // auto/denying askers hold nothing
+    expect(createAutoAsker().close).toBeUndefined();
+    expect(createDenyingAsker().close).toBeUndefined();
+  });
+
   it('renders the box: label, preview lines, the question WITHOUT [e] for non-exec tools', async () => {
     const a = askerWith(['y']);
     const decision = await a.ask(writeReq);
@@ -159,7 +181,12 @@ describe('permission menu primitives', () => {
 
   it('menuOptions: edit offered for exec; always dropped for neverAutoAllow tools', () => {
     expect(menuOptions(false, false)).toEqual(['Yes', 'Yes, always this session', 'No']);
-    expect(menuOptions(true, false)).toEqual(['Yes', 'Yes, always this session', 'No', 'Edit command']);
+    expect(menuOptions(true, false)).toEqual([
+      'Yes',
+      'Yes, always this session',
+      'No',
+      'Edit command',
+    ]);
     expect(menuOptions(false, true)).toEqual(['Yes', 'No']);
     expect(menuOptions(true, true)).toEqual(['Yes', 'No', 'Edit command']);
   });

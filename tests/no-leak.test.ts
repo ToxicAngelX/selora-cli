@@ -216,7 +216,7 @@ describe('no-leak (hard rule: credentials never appear in output, even in debug 
       apiUrl: server.url,
       io: { ...io, stdin: pipedStdin(['hi', '/exit']), isTTY: true },
     };
-    await runChat(c, {});
+    await runChat(c, { cwd: mkdtempSync(join(tmpdir(), 'selora-nl-')) });
     // combined view: line writes AND raw streaming writes
     const text = `${cap.all()}\n${cap.outText()}\n${cap.errText()}`;
     // debug actually ran for the streaming request, and the stream rendered

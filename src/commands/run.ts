@@ -14,8 +14,13 @@
  * read-only tools; `--yes` auto-approves everything the (possibly --safe)
  * toolset still allows; `--json` buffers machine output and DENIES tools
  * unless --yes is also given (prompts cannot be interactive in JSON mode).
- * `--session <name>` resumes/saves the conversation under
- * .selora/sessions/<name>.json — saved only when the run completes.
+ *
+ * v0.6: images and crash-safe sessions. `@<path>` tokens in the prompt attach
+ * local images (png/jpg/jpeg/webp/gif, ≤4 MB, max 4) as image_url parts —
+ * `selora run "what is in @shot.png"`. And `--session <name>` no longer means
+ * "saved only when the run completes": the agent loop reports the history at
+ * every resumable checkpoint, so a Ctrl+C (or a failure) mid-run saves the
+ * turns completed SO FAR — resume with `selora resume <name>`.
  *
  * Model resolution (silent unless --debug): --model > the resumed session's
  * model > the project's selora.json model > the global defaultModel >
@@ -33,6 +38,12 @@ import { Renderer } from '../terminal/render.js';
 import { chatFooterLine, formatChatCost } from './chat-footer.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
 import { formatCount } from '../format.js';
+import {
+  imageMarker,
+  parseImageInput,
+  userMessageContent,
+  type ImageAttachment,
+} from '../images.js';
 import { runAgentLoop, DEFAULT_MAX_TURNS } from '../agent/loop.js';
 import { builtinTools } from '../agent/tools/index.js';
 import {
@@ -57,7 +68,7 @@ export interface RunFlags {
   model?: string | undefined;
   /** Directory whose selora.json is consulted (defaults to process.cwd()). */
   cwd?: string | undefined;
-  /** Resume/create a named conversation session (saved on completion). */
+  /** Resume/create a named conversation session (saved at every checkpoint). */
   session?: string | undefined;
   /** Auto-approve tools non-interactively (still filtered by --safe). */
   yes?: boolean;
@@ -65,6 +76,15 @@ export interface RunFlags {
   safe?: boolean;
   /** Turn cap override (1-200; default: selora.json agent.maxTurns or 25). */
   maxTurns?: number | undefined;
+}
+
+/**
+ * Minimal test/automation seam: if provided, called once with a function that
+ * aborts the in-flight run (what Ctrl+C does live — SIGINT aborts, then the
+ * completed turns are saved).
+ */
+export interface RunHooks {
+  registerInterrupt?: ((interrupt: () => void) => void) | undefined;
 }
 
 type ModelSource =
@@ -113,6 +133,7 @@ export async function runRun(
   ctx: CliContext,
   prompt: string | undefined,
   flags: RunFlags,
+  hooks: RunHooks = {},
 ): Promise<void> {
   const r = new Renderer({
     out: ctx.io.out,
@@ -123,7 +144,25 @@ export async function runRun(
     debug: ctx.debug,
   });
 
-  if (prompt === undefined || prompt.trim() === '') {
+  const cwd = flags.cwd ?? process.cwd();
+
+  // Images: `@<path>` tokens attach local files as image_url parts. A parse
+  // failure (missing file, too large, too many) exits 1 BEFORE any request.
+  let promptText = prompt ?? '';
+  let images: ImageAttachment[] = [];
+  if (prompt !== undefined) {
+    const parsed = parseImageInput(prompt, cwd);
+    if (!parsed.ok) {
+      process.exitCode = 1;
+      if (ctx.json) r.jsonOut({ ok: false, error: { kind: 'internal', message: parsed.error } });
+      else r.fail(parsed.error);
+      return;
+    }
+    promptText = parsed.text;
+    images = parsed.images;
+  }
+
+  if (promptText.trim() === '' && images.length === 0) {
     process.exitCode = 1;
     const message = 'Usage: selora run "<prompt>"';
     if (ctx.json) r.jsonOut({ ok: false, error: { kind: 'internal', message } });
@@ -139,8 +178,6 @@ export async function runRun(
     return;
   }
 
-  const cwd = flags.cwd ?? process.cwd();
-
   // Session: load the existing conversation or start a fresh one.
   let session: StoredSession | null = null;
   if (flags.session !== undefined) {
@@ -154,6 +191,8 @@ export async function runRun(
     }
     session = loadSession(cwd, flags.session) ?? newSession(flags.session, '');
   }
+  /** How many messages the session already held — the crash-save baseline. */
+  const sessionBaseCount = session?.messages.length ?? 0;
 
   const { model, source } = resolveModel(flags, session);
   if (session !== null) session.model = model;
@@ -179,8 +218,17 @@ export async function runRun(
     logger: ctx.io.err,
   });
 
-  // Initial history: the resumed session (if any) + this prompt.
-  const messages: ChatMessage[] = [...(session?.messages ?? []), { role: 'user', content: prompt }];
+  // Initial history: the resumed session (if any) + this prompt (text and/or
+  // image parts — the multimodal user content shape).
+  const userContent = userMessageContent(promptText, images);
+  const messages: ChatMessage[] = [
+    ...(session?.messages ?? []),
+    { role: 'user', content: userContent },
+  ];
+  // Attached images are announced once, on stderr — stdout stays reply text.
+  if (!ctx.json) {
+    for (const img of images) r.bullet(imageMarker(img));
+  }
 
   // The toolset: the built-ins, filtered to read-only under --safe.
   const tools: Tool[] = flags.safe
@@ -213,6 +261,17 @@ export async function runRun(
 
   let content = '';
   let sawReasoning = false;
+
+  // Crash-safe sessions (v0.6): the loop reports the history at every
+  // resumable checkpoint. Ctrl+C aborts the in-flight stream (previously the
+  // process just died and an attached session lost EVERYTHING) — the catch
+  // path then saves the turns completed so far.
+  const interrupt = new AbortController();
+  const onSigint = (): void => interrupt.abort();
+  process.once('SIGINT', onSigint);
+  hooks.registerInterrupt?.(() => interrupt.abort());
+  let checkpoint: ChatMessage[] | undefined;
+
   try {
     const result = await runAgentLoop({
       client,
@@ -223,6 +282,7 @@ export async function runRun(
       cwd,
       permissions,
       autoApprove: flags.yes === true,
+      signal: interrupt.signal,
       renderDiff: (before, after) =>
         renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 }),
       callbacks: {
@@ -266,6 +326,9 @@ export async function runRun(
             const footer = chatFooterLine(totals.usage, totals.charge);
             if (footer !== undefined) r.gray(footer);
           }
+        },
+        onHistorySnapshot: (snap) => {
+          checkpoint = snap;
         },
       },
     });
@@ -334,8 +397,41 @@ export async function runRun(
     }
   } catch (err) {
     if (!ctx.json && content !== '') r.writeRaw('\n'); // end the partial line
+
+    // Crash-safe save: whatever turn died, the checkpoints before it survived.
+    // Never mid-turn state — the loop only reports wire-valid histories.
+    if (session !== null && checkpoint !== undefined && checkpoint.length > sessionBaseCount) {
+      try {
+        session = { ...session, model, messages: checkpoint };
+        saveSession(cwd, session);
+        if (!ctx.json) {
+          r.bullet(
+            `session "${flags.session ?? ''}" saved up to the last completed turn — resume: selora resume ${flags.session ?? ''}`,
+          );
+        }
+      } catch {
+        if (!ctx.json) r.bullet('could not save the session — the completed turns are lost');
+      }
+    }
+
+    if (err instanceof SeloraApiError && err.kind === 'cancelled') {
+      // Ctrl+C: not a failure — the Unix 130, and (with --session) the turns
+      // completed so far are already saved above.
+      process.exitCode = 130;
+      if (ctx.json) {
+        r.jsonOut({ ok: false, error: { kind: 'cancelled', message: 'Request cancelled.' } });
+      } else {
+        r.bullet('Interrupted — request cancelled.');
+      }
+      return;
+    }
     // Same mapping as chat: 402 window message verbatim, 429 retry hint,
     // 401 → login guidance, in-band stream errors verbatim.
     r.renderError(err);
+  } finally {
+    process.removeListener('SIGINT', onSigint);
+    // The interactive asker owns a readline over stdin — an open readline on
+    // a TTY keeps the event loop alive and the process would never exit.
+    permissions.close?.();
   }
 }

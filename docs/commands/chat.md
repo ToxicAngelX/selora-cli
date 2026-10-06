@@ -2,7 +2,9 @@
 
 Interactive streaming chat session with a model — and, since v0.3, the agent
 REPL: every message runs the full tool loop (permission-gated) with a
-galaxy-themed UI. `run`'s one-shot pipeline, but conversational.
+galaxy-themed UI. `run`'s one-shot pipeline, but conversational. Since v0.6
+the conversation is **crash-safe** (saved after every completed turn) and
+messages can carry **images**.
 
 ```
 ✓ Connected to glm-5.3-flash (GLM 5.3 Flash)
@@ -41,7 +43,8 @@ Done — the folder is on your desktop.
   a slow ambient rate (one redraw every 1.6s: a rotating third of the stars
   goes bright, and the gradient drifts a full cycle in about two minutes).
   Honest tradeoff: lines that scroll out of the region are NOT added to the
-  terminal's scrollback. Opt out with `SELORA_NO_ANIMATE` (or `mono` /
+  terminal's scrollback (the conversation itself is safe — it auto-saves to
+  `.selora/sessions/chat.json`, see [History](#history-v06-crash-safe)). Opt out with `SELORA_NO_ANIMATE` (or `mono` /
   NO_COLOR) for the classic inline screen that leaves scrollback intact.
 - **Prompt**: a dim context line (`model · cwd · tokens`), a dim mode line
   (`⏸ manual mode on · ? for shortcuts`), and a gradient `❯` marker. An
@@ -96,7 +99,8 @@ process only. See [docs/agent.md](../agent.md) for the full sandbox model.
 
 ## Model resolution
 
-`--model <id>` > the configured default model (`selora model <id>`) >
+`--model <id>` > the resumed session's model (an accepted resume offer, or
+`selora resume`) > the configured default model (`selora model <id>`) >
 `glm-5.3-flash`.
 
 The model is **verified** via the public `GET /v1/models/:id` route (no auth
@@ -108,6 +112,31 @@ model.
 Chat authenticates with the **stored API key only**. With no stored key the
 command exits 1 with `You are not logged in. Run: selora login`.
 
+## Images (v0.6)
+
+Type `@<path>` in a message to attach a local image — or drag a file onto the
+terminal (both drag shapes work: `@"C:\my dir\a.png"` quoted and
+`@/tmp/my\ shot.png` backslash-escaped):
+
+```
+❯ what is in @screenshot.png compared to @mockup.webp
+[image: screenshot.png, 212.8 KB]
+[image: mockup.webp, 96 KB]
+```
+
+- Formats: **png, jpg, jpeg, webp, gif** (the extension decides — a token
+  counts as an image reference only when it starts with `@` and ends in one of
+  these; `@channel` and `@notes.md` stay literal text, and `\@` types a
+  literal `@`).
+- Each file must exist and be at most **4 MB** (checked before encoding — a
+  bigger file would only 413 at the gateway). At most **4 images** per
+  message.
+- The image is base64-encoded as a `data:` URL and sent as an `image_url`
+  content part alongside your text. The transcript shows only the
+  `[image: name, KB]` marker — base64 never prints.
+- A bad reference (missing file, too large, too many) is a friendly error and
+  **nothing is sent** — fix the line and retype it.
+
 ## Slash commands
 
 | Command         | Effect                                                                        |
@@ -116,7 +145,7 @@ command exits 1 with `You are not logged in. Run: selora login`.
 | `/model`        | show the current model                                                        |
 | `/model <id>`   | verify `<id>` via `/v1/models/:id`, then switch (404 keeps the current model) |
 | `/theme`        | show the current theme                                                        |
-| `/theme <name>` | switch (galaxy, nebula, aurora, mono) — saved to the global config          |
+| `/theme <name>` | switch (galaxy, nebula, aurora, mono) — saved to the global config            |
 | `/clear`        | clear the conversation history                                                |
 | `/tools`        | list the tools available this session (and the permission mode)               |
 | `/permissions`  | show what is auto-allowed this session (memory-only state)                    |
@@ -152,11 +181,30 @@ rotation message.
 `✗ selora chat needs an interactive terminal — use: selora run "<prompt>"`
 and exits 1. Scripted one-shot use belongs to `selora run` ([run.md](run.md)).
 
-## History
+## History (v0.6: crash-safe)
 
-Conversation state is **in-memory only** — never written to disk, never sent
-anywhere except as the `messages` array of the next request. Each turn sends
-the full in-memory history (user + assistant + tool messages of prior turns).
+The conversation is **saved after every completed turn** to the project-local
+`.selora/sessions/chat.json` (atomic tmp+rename write — a kill mid-write can
+never corrupt the previous save). A crash, a killed terminal, or a dead
+laptop loses nothing that completed. Aborted and failed turns are still
+dropped entirely — a half-finished turn would corrupt the wire history.
+
+- **Resume offer**: a bare `selora chat` with a saved non-empty session asks
+  once, `Resume the previous session? (N messages, updated …) [y/N]` — one
+  keystroke, never a silent auto-resume. Any other answer starts fresh (the
+  file is replaced on the next completed turn). The resumed session's model
+  is used unless `--model` overrides it.
+- **`selora resume [name]`** is the explicit form — any saved session
+  (including `selora run --session <name>` ones), no question asked. See
+  [resume.md](resume.md).
+- `/clear` clears the saved file too — a cleared conversation is not offered
+  again.
+- The exit summary points at the save when there is one:
+  `· Conversation saved — resume it with: selora resume`.
+
+Each turn still sends the full history (user + assistant + tool messages of
+prior turns) as the `messages` array of the request — nothing else leaves the
+machine.
 
 ## Flags
 

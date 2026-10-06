@@ -9,6 +9,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { startMockServer, type MockServer } from './mock/server.js';
 import {
@@ -100,6 +103,20 @@ function replIo(lines: string[]): {
 function replCtx(io: CliIo, json = false): CliContext {
   return { debug: false, json, apiUrl: server.url, io };
 }
+
+// v0.6: chat auto-saves into <cwd>/.selora/sessions/ — every REPL test gets a
+// fresh temp project so nothing is written into the repo and no resume offer
+// leaks across tests.
+const chatDirs: string[] = [];
+function chatCwd(): string {
+  const d = mkdtempSync(join(tmpdir(), 'selora-chat-'));
+  chatDirs.push(d);
+  return d;
+}
+
+afterAll(() => {
+  for (const d of chatDirs) rmSync(d, { recursive: true, force: true });
+});
 
 const MESSAGES: ChatMessage[] = [{ role: 'user', content: 'hello' }];
 
@@ -462,7 +479,7 @@ describe('chat REPL', () => {
     const before = server.requests.length;
     const { io, cap } = replIo(['hello', '/model gpt-5.2-mini', 'second question', '/exit']);
 
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
 
     const out = cap.out();
     // verified header with the display name
@@ -509,7 +526,7 @@ describe('chat REPL', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_NO_USAGE]);
     const { io, cap } = replIo(['hi', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const out = cap.out();
     expect(out).toContain('No footer for this one.');
     expect(out).not.toContain('Tokens:');
@@ -522,7 +539,7 @@ describe('chat REPL', () => {
     installChatRoutes([CHAT_STREAM_FULL]);
     const before = server.requests.length;
     const { io, cap } = replIo(['hello', '/exit']);
-    await runChat(replCtx(io), { model: 'no-such-model' });
+    await runChat(replCtx(io), { model: 'no-such-model', cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('✗ Model not available');
     expect(text).toContain('List available models with: selora models');
@@ -539,7 +556,7 @@ describe('chat REPL', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo(['hello', '/exit']);
-    await runChat(replCtx(io, true), { model: 'no-such-model' });
+    await runChat(replCtx(io, true), { model: 'no-such-model', cwd: chatCwd() });
     const parsed = JSON.parse(cap.out()) as { ok: boolean; error: { message: string } };
     expect(parsed.ok).toBe(false);
     expect(parsed.error.message).toBe('Model not available');
@@ -551,7 +568,7 @@ describe('chat REPL', () => {
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo([]);
     const nonTTY: CliIo = { ...io, stdin: Readable.from([]), isTTY: false };
-    await runChat(replCtx(nonTTY), {});
+    await runChat(replCtx(nonTTY), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain(
       '✗ selora chat needs an interactive terminal — use: selora run "<prompt>"',
@@ -564,7 +581,7 @@ describe('chat REPL', () => {
     saveConfig({});
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo(['hello', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     expect(cap.all()).toContain('✗ You are not logged in. Run: selora login');
     expect(process.exitCode).toBe(1);
   });
@@ -586,7 +603,7 @@ describe('chat REPL', () => {
     let interrupt: (() => void) | undefined;
     const session = runChat(
       replCtx(io),
-      {},
+      { cwd: chatCwd() },
       {
         registerInterrupt: (fn) => {
           interrupt = fn;
@@ -625,7 +642,7 @@ describe('chat REPL', () => {
       return { status: 404, body: NOT_FOUND };
     });
     const { io, cap } = replIo(['oops', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('✗ Your 4h plan usage limit is reached');
     expect(text).toContain(WINDOW_RESET_TEXT);
@@ -646,7 +663,7 @@ describe('chat REPL', () => {
       return { status: 404, body: NOT_FOUND };
     });
     const { io, cap } = replIo(['hello', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('This API key was revoked on 2026-10-01');
     expect(text).toContain('restart the app');
@@ -658,7 +675,7 @@ describe('chat REPL', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo(['', '/wat', '/model', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('Unknown command /wat — /help lists commands.');
     expect(text).toContain('Current model: glm-5.3-flash (GLM 5.3 Flash)');
@@ -671,7 +688,7 @@ describe('chat REPL', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo(['', '', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     // Full prompt drawn once (before the first line); the two empty Enters
     // reprompt with the bare ❯ marker only: the context line appears ONCE.
     expect(cap.err().split('glm-5.3-flash · ').length - 1).toBe(1);
@@ -686,7 +703,7 @@ describe('chat REPL', () => {
     installChatRoutes([CHAT_STREAM_FULL]);
     const before = server.requests.length;
     const { io, cap } = replIo(['?', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('shift+tab — cycle the permission mode');
     expect(text).toContain('Ctrl+C — stop the streaming reply');
@@ -700,10 +717,10 @@ describe('chat REPL', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);
     const yes = replIo(['/exit']);
-    await runChat(replCtx(yes.io), { yes: true });
+    await runChat(replCtx(yes.io), { yes: true, cwd: chatCwd() });
     expect(yes.cap.err()).toContain('⏵⏵ auto mode on · ? for shortcuts');
     const safe = replIo(['/exit']);
-    await runChat(replCtx(safe.io), { safe: true });
+    await runChat(replCtx(safe.io), { safe: true, cwd: chatCwd() });
     expect(safe.cap.err()).toContain('⏸ safe mode on (read-only tools) · ? for shortcuts');
     expect(process.exitCode).toBeUndefined();
   });
@@ -713,7 +730,7 @@ describe('chat REPL', () => {
     installChatRoutes([CHAT_STREAM_FULL]);
     const before = server.requests.length;
     const { io, cap } = replIo(['/model no-such-model', 'hello', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('✗ Model not available');
     expect(text).not.toContain('Switched to');
@@ -727,7 +744,7 @@ describe('chat REPL', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo(['/theme nebula', '/theme', '/theme nope', '/exit']);
-    await runChat(replCtx(io), {});
+    await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('✓ Theme set to nebula');
     expect(loadConfig().theme).toBe('nebula');

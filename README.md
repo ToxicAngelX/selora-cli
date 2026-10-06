@@ -16,6 +16,13 @@ tool-call display, colored diffs, a shimmering spinner (thinking is shown as
 an animation, never printed as text), and an arrow-key permission menu — with
 four themes (`galaxy`, `nebula`, `aurora`, `mono`) and honest
 NO_COLOR/non-TTY/`--json` fallbacks.
+
+v0.6 adds **crash-safe sessions and image input**: chat auto-saves after
+every completed turn and offers to resume on the next launch
+(`selora resume [name]` reopens any saved session, `run --session` survives a
+Ctrl+C mid-run with the completed turns intact), and `@<path>` attaches
+images (png/jpg/webp/gif) to any chat or run message.
+
 Ask it things like _"create a folder called Projects on my desktop"_ and it
 does it, no shell required.
 
@@ -25,8 +32,6 @@ does it, no shell required.
 - Linux, macOS, or Windows
 
 ## Install
-
-When the package is published:
 
 ```sh
 npm i -g selora
@@ -84,8 +89,9 @@ The key is validated against the API **before** anything is stored.
 | `selora models`                       | list available models with pricing                                            | [models.md](docs/commands/models.md)         |
 | `selora model [id]`                   | show the default model, or set it to `<id>`                                   | [model.md](docs/commands/model.md)           |
 | `selora keys [list\|create\|revoke]`  | manage API keys (default: list)                                               | [keys.md](docs/commands/keys.md)             |
-| `selora chat`                         | interactive agent REPL: tools, galaxy UI, permission menus                    | [chat.md](docs/commands/chat.md)             |
+| `selora chat`                         | interactive agent REPL: tools, galaxy UI, permission menus, images            | [chat.md](docs/commands/chat.md)             |
 | `selora run "<prompt>"`               | one-shot streaming completion with the agent tool loop (permissions gated)    | [run.md](docs/commands/run.md)               |
+| `selora resume [name]`                | reopen a saved conversation in the chat REPL (default: the most recent)       | [resume.md](docs/commands/resume.md)         |
 | `selora sessions [list\|show\|rm]`    | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
 | `selora init`                         | write a project-local selora.json (model + agent context globs)               | [init.md](docs/commands/init.md)             |
 | `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, aurora, mono)                       | [theme.md](docs/commands/theme.md)           |
@@ -162,12 +168,16 @@ project `selora.json` (see below) for `run`.
   redaction chokepoint before printing; the Authorization header is never
   printed. The one deliberate exception is `selora keys create`, whose entire
   purpose is printing the one-time secret the backend returns exactly once.
-- Conversation state is in-memory only — never written to disk, never sent
-  anywhere except as the `messages` array of the next request. The one
-  exception is an explicit `selora run --session <name>`, which saves the
-  conversation into the project's `.selora/sessions/` (visible, deletable
-  via `selora sessions rm`). Agent tool results travel the same `messages`
-  array — nothing else about your files is sent anywhere.
+- Conversation state is sent nowhere except as the `messages` array of the
+  next request. Since v0.6 it is also **saved locally**:
+  `selora chat` auto-saves after every completed turn and
+  `selora run --session <name>` saves at every completed step — all under the
+  project's `.selora/sessions/` (visible, gitignore-able, deletable via
+  `selora sessions rm`; resume with `selora resume`). Agent tool results
+  travel the same `messages` array — nothing else about your files is sent
+  anywhere. Images you attach with `@<path>` are base64-encoded into the
+  request (and the session file) — they leave the machine only as part of the
+  chat request to the gateway.
 - MIT license — see [LICENSE](LICENSE).
 
 ## Configuration

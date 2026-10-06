@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-06
+
+Crash-safe conversations and image input. No new runtime dependencies (still
+exactly `commander` + `picocolors`).
+
+### Added
+
+- **Crash-safe chat sessions**: `selora chat` auto-saves the conversation to
+  `.selora/sessions/chat.json` after every COMPLETED turn (atomic tmp+rename)
+  — a crash, kill, or dead laptop loses nothing that completed. Aborted and
+  failed turns are still dropped entirely (a half-finished turn would corrupt
+  the wire history). `/clear` clears the saved file too.
+- **`selora resume [name]`**: reopen a saved conversation in the chat REPL
+  with the full history restored — the most recent session by default, or a
+  named one (including `run --session` files). The REPL keeps auto-saving
+  under the same name; the session's model is used unless `--model`
+  overrides. Bare `selora chat` with a saved session asks once:
+  `Resume the previous session? (N messages, updated …) [y/N]` — never a
+  silent auto-resume.
+- **`run --session` survives interruption**: the agent loop reports the
+  history at every resumable checkpoint, so Ctrl+C (now a clean abort, exit 130) or a mid-run failure saves the turns completed so far — previously the
+  session was written only on full completion and an interrupt lost
+  everything.
+- **Image input**: `@<path>` tokens in a chat message or a run prompt attach
+  local images (png/jpg/jpeg/webp/gif, ≤4 MB each, max 4 per message) as
+  OpenAI `image_url` data-URL parts. Drag-and-drop paths work
+  (`@"C:\my dir\a.png"` quoted, `@/tmp/my\ shot.png` escaped); `@channel`
+  stays literal text and `\@` escapes the marker. The transcript shows
+  `[image: name, 12.4 KB]` — base64 never prints. A bad reference (missing,
+  too large, too many) errors before anything is sent.
+- **Session format v2**: user messages may carry the multimodal parts array.
+  v1 files load unchanged and are rewritten as v2 on the next save; a file
+  with a newer version is reported and skipped, never mangled.
+  `selora sessions list --json` gains a `resumable: true` marker per session.
+- `selora run` accepts a **variadic prompt** — `selora run check @img.png`
+  works unquoted.
+
+### Fixed
+
+- **`selora run` never exited on a real TTY** (latent since v0.2): the
+  interactive permission asker eagerly opened a readline over stdin and
+  nothing ever closed it, so the event loop stayed alive after the run
+  finished. The asker now has a `close()` and `run` calls it. (Invisible in
+  tests — piped stdin EOFs on its own; caught by the v0.6 pty verification.)
+- The agent loop's max-turns stop replaced the wrong history entry (the last
+  tool result instead of the dangling assistant tool_calls message), which
+  would have saved a wire-invalid session; the answered tool round is now
+  kept intact so a saved session resumes cleanly. The 3-consecutive-failure
+  breaker similarly backfills an honest "not executed" tool result for any
+  parallel calls it skipped.
+- `selora chat --json` no longer echoes input to stdout (the JSON channel
+  carries reply text only).
+
 ## [0.5.0] - 2026-10-06
 
 ### Added

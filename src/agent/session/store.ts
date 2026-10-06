@@ -2,8 +2,14 @@
  * Agent session persistence: conversation state (the wire-shaped message
  * history, including tool calls and results) saved under
  * `<project root>/.selora/sessions/<name>.json` — project-local, visible,
- * gitignore-able. Sessions advance ONLY on completed runs: a run that dies
- * mid-stream never writes (a half-finished turn would corrupt the history).
+ * gitignore-able. Writes are atomic (tmp + rename), so a crash mid-write can
+ * never corrupt the previous file.
+ *
+ * Format v2 (0.6.0): identical to v1 except a user message's `content` may be
+ * the OpenAI multimodal PARTS ARRAY (text + image_url parts) instead of a
+ * plain string. v1 files load unchanged — a v1 string is just the single-part
+ * case — and are rewritten as v2 on the next save. Any OTHER version number is
+ * reported and skipped, never mangled.
  *
  * Names are validated to a conservative slug set (letters, digits, dash,
  * underscore, dot; must start alphanumeric; 1-64 chars) so a session name can
@@ -26,12 +32,13 @@ import { randomUUID } from 'node:crypto';
 import type { ChatMessage } from '../../api/endpoints/chat.js';
 
 export const SESSIONS_DIR = '.selora/sessions';
-export const SESSION_VERSION = 1;
+export const SESSION_VERSION = 2;
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface StoredSession {
-  version: 1;
+  /** Always written as SESSION_VERSION; 1 and 2 both load. */
+  version: number;
   name: string;
   model: string;
   createdAt: string;
@@ -89,6 +96,14 @@ function parseSession(text: string, path: string): StoredSession | null {
   const messages = Array.isArray(rec['messages']) ? rec['messages'] : null;
   if (name === '' || model === '' || createdAt === '' || updatedAt === '' || messages === null) {
     console.error(`· Ignoring malformed session file ${path}`);
+    return null;
+  }
+  // Version check: absent means a pre-versioning file (treated as 1); 1 and 2
+  // load (v2 only adds multimodal user content, a superset of the v1 shape);
+  // anything else is a future format this CLI cannot read — skip, don't mangle.
+  const versionRaw = rec['version'];
+  if (versionRaw !== undefined && versionRaw !== 1 && versionRaw !== 2) {
+    console.error(`· Ignoring session file ${path} (unsupported version ${String(versionRaw)})`);
     return null;
   }
   return {

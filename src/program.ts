@@ -21,6 +21,7 @@ import { runChat } from './commands/chat.js';
 import { runTheme } from './commands/theme.js';
 import { runInit } from './commands/init.js';
 import { runRun } from './commands/run.js';
+import { runResume } from './commands/resume.js';
 import { runSessions } from './commands/sessions.js';
 import { runCompletion } from './commands/completion.js';
 import { THEME_NAMES } from './ui/theme.js';
@@ -219,32 +220,55 @@ export function buildProgram(io: CliIo): Command {
       });
     });
 
-  // [prompt] (optional at the commander level) so a missing argument gets the
-  // command's own honest usage error rather than commander's generic one.
+  // [prompt...] variadic (joined with spaces): `selora run check @img.png`
+  // works unquoted, and a missing argument still gets the command's own
+  // honest usage error rather than commander's generic one.
   const runCmd = program
-    .command('run [prompt]')
-    .description('one-shot streaming completion with the agent tool loop (permissions gated)')
+    .command('run [prompt...]')
+    .description(
+      'one-shot streaming completion with the agent tool loop (permissions gated); @<path> attaches images',
+    )
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')
     .option('--model <id>', 'model for this request')
-    .option('--session <name>', 'resume/create a named conversation session')
+    .option('--session <name>', 'resume/create a named conversation session (crash-safe)')
     .option('--safe', 'restrict the agent to read-only tools')
     .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
     .option('--max-turns <n>', 'agent turn cap (default: 25; selora.json agent.maxTurns)')
-    .action(async (prompt: unknown, opts: Record<string, unknown>) => {
+    .action(async (promptParts: unknown, opts: Record<string, unknown>) => {
       const maxTurnsRaw = opts['maxTurns'];
       let maxTurns: number | undefined;
       if (typeof maxTurnsRaw === 'string' && maxTurnsRaw.trim() !== '') {
         const n = Number(maxTurnsRaw);
         maxTurns = Number.isInteger(n) ? n : Number.NaN;
       }
-      await runRun(ctxFor(runCmd), typeof prompt === 'string' ? prompt : undefined, {
+      const parts = Array.isArray(promptParts)
+        ? promptParts.filter((p): p is string => typeof p === 'string')
+        : [];
+      await runRun(ctxFor(runCmd), parts.length > 0 ? parts.join(' ') : undefined, {
         model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
         session: typeof opts['session'] === 'string' ? opts['session'] : undefined,
         yes: opts['yes'] === true,
         safe: opts['safe'] === true,
         maxTurns,
+      });
+    });
+
+  const resumeCmd = program
+    .command('resume [name]')
+    .description('resume a saved conversation in the chat REPL (default: the most recent session)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--model <id>', "model for this session (default: the session's model)")
+    .option('--safe', 'restrict the agent to read-only tools')
+    .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
+    .action(async (name: unknown, opts: Record<string, unknown>) => {
+      await runResume(ctxFor(resumeCmd), typeof name === 'string' ? name : undefined, {
+        model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
+        safe: opts['safe'] === true,
+        yes: opts['yes'] === true,
       });
     });
 

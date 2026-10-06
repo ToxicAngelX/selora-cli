@@ -86,6 +86,15 @@ export interface AgentLoopCallbacks {
     | undefined;
   /** After each stream turn: per-turn usage/charge AND the running totals. */
   onTurnComplete: (totals: AgentUsageTotals) => void;
+  /**
+   * v0.6 crash-safe sessions: fired with a COPY of the history every time it
+   * reaches a resumable checkpoint — all of a turn's tool calls answered,
+   * before the next stream starts. Never fired mid-turn: an assistant
+   * tool_calls message without its tool results is invalid on the wire, and a
+   * half-finished turn would corrupt a resumed conversation. The caller
+   * (run --session) saves the latest snapshot if the run dies.
+   */
+  onHistorySnapshot?: ((messages: ChatMessage[]) => void) | undefined;
 }
 
 export interface AgentLoopOptions {
@@ -240,7 +249,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
       tool_calls: echo,
     });
 
-    for (const call of result.toolCalls) {
+    for (let callIndex = 0; callIndex < result.toolCalls.length; callIndex += 1) {
+      const call = result.toolCalls[callIndex]!;
       const outcome = await executeToolCall(opts, permissions, allows, call, history, toolEvents);
       if (outcome === 'failed') {
         consecutiveFailures += 1;
@@ -248,16 +258,30 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
         consecutiveFailures = 0;
       } // 'denied' leaves the failure counter untouched
       if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+        // Wire-valid stop: parallel calls the breaker skipped still need a
+        // tool message each, or a saved session resumes into a 400.
+        for (const rest of result.toolCalls.slice(callIndex + 1)) {
+          history.push({
+            role: 'tool',
+            tool_call_id: rest.id,
+            content: 'Not executed: the run stopped after 3 consecutive tool failures.',
+          });
+        }
         return finish('tool-failures', turn);
       }
     }
 
     if (turn === opts.maxTurns) {
-      // No stream turns left — the requested tools cannot be answered. The
-      // dangling tool_calls are dropped (content-only message kept).
-      history[history.length - 1] = { role: 'assistant', content: turnContent };
+      // No stream turns left to ANSWER the tool results — but every requested
+      // call has its result in the history, so the shape stays wire-valid and
+      // a saved session resumes cleanly (the model answers them next run).
+      opts.callbacks.onHistorySnapshot?.([...history]);
       return finish('max-turns', turn);
     }
+
+    // A resumable checkpoint: every requested tool of this turn has its result
+    // in the history — the wire shape is valid from here.
+    opts.callbacks.onHistorySnapshot?.([...history]);
   }
   return finish('max-turns', opts.maxTurns);
 

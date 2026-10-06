@@ -62,6 +62,9 @@ export async function runSessions(
           model: s.model,
           updatedAt: s.updatedAt,
           messages: s.messageCount,
+          // Every stored session is a wire-valid conversation — resumable via
+          // `selora resume [name]`. Constant today; a forward-compat marker.
+          resumable: true,
         })),
       });
       return;
@@ -191,5 +194,21 @@ function renderMessage(r: Renderer, m: unknown): void {
 }
 
 function contentText(v: unknown): string {
-  return typeof v === 'string' ? v : v === null ? '(no content)' : String(v);
+  if (typeof v === 'string') return v;
+  if (v === null || v === undefined) return '(no content)';
+  if (Array.isArray(v)) {
+    // v2 multimodal user content: text parts print, image parts show a marker
+    // — a data URL's base64 must NEVER reach the terminal.
+    const out: string[] = [];
+    for (const part of v) {
+      const p =
+        typeof part === 'object' && part !== null ? (part as Record<string, unknown>) : null;
+      if (p === null) continue;
+      if (p['type'] === 'text' && typeof p['text'] === 'string') out.push(p['text']);
+      else if (p['type'] === 'image_url') out.push('[image attached]');
+      else out.push('[unsupported part]');
+    }
+    return out.join(' ');
+  }
+  return String(v);
 }

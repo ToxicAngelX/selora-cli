@@ -7,7 +7,15 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanup, capturedIo, freshEnv, type TempEnv } from './helpers/env.js';
@@ -169,6 +177,85 @@ describe('session store', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('v2: a v1 file loads unchanged (strings are the single-part case) and re-saves as v2', () => {
+    const root = tempProject();
+    try {
+      // a hand-written v1 file, exactly what 0.2–0.5 produced
+      mkdirSync(sessionsDir(root), { recursive: true });
+      writeFileSync(
+        sessionPath(root, 'old'),
+        JSON.stringify({
+          version: 1,
+          name: 'old',
+          model: 'glm-5.3-flash',
+          createdAt: '2026-10-05T10:00:00.000Z',
+          updatedAt: '2026-10-05T10:00:00.000Z',
+          messages: [{ role: 'user', content: 'hello' }],
+        }),
+        'utf8',
+      );
+      const loaded = loadSession(root, 'old');
+      expect(loaded).not.toBeNull();
+      expect(loaded!.version).toBe(2); // normalized in memory
+      expect(loaded!.messages).toEqual([{ role: 'user', content: 'hello' }]);
+      // re-saving writes the current format
+      saveSession(root, loaded!);
+      const raw = JSON.parse(readFileSync(sessionPath(root, 'old'), 'utf8')) as { version: number };
+      expect(raw.version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v2: multimodal user content (the parts array) round-trips through save/load', () => {
+    const root = tempProject();
+    try {
+      const s = newSession('img', 'glm-5.3-flash');
+      s.messages = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is this' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+          ],
+        },
+        { role: 'assistant', content: 'a tiny image' },
+      ];
+      saveSession(root, s);
+      const loaded = loadSession(root, 'img');
+      expect(loaded).not.toBeNull();
+      expect(loaded!.messages).toEqual(s.messages);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a future version is reported and skipped — never mangled', () => {
+    const root = tempProject();
+    try {
+      mkdirSync(sessionsDir(root), { recursive: true });
+      writeFileSync(
+        sessionPath(root, 'future'),
+        JSON.stringify({
+          version: 99,
+          name: 'future',
+          model: 'm',
+          createdAt: 't',
+          updatedAt: 't',
+          messages: [],
+        }),
+        'utf8',
+      );
+      expect(loadSession(root, 'future')).toBeNull();
+      // the file is untouched
+      expect(JSON.parse(readFileSync(sessionPath(root, 'future'), 'utf8'))).toMatchObject({
+        version: 99,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -211,11 +298,11 @@ describe('selora sessions', () => {
       await runSessions(ctx(io, true), 'list', undefined, { cwd: root });
       const parsed = JSON.parse(cap.out.join('')) as {
         ok: boolean;
-        sessions: Array<{ name: string; messages: number }>;
+        sessions: Array<{ name: string; messages: number; resumable: boolean }>;
       };
       expect(parsed.ok).toBe(true);
       expect(parsed.sessions).toEqual([
-        { name: 'j', model: 'm1', updatedAt: expect.any(String), messages: 2 },
+        { name: 'j', model: 'm1', updatedAt: expect.any(String), messages: 2, resumable: true },
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -275,6 +362,31 @@ describe('selora sessions', () => {
       };
       expect(parsed.ok).toBe(true);
       expect(parsed.messages[0]!.content).toHaveLength(500);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('show: v2 multimodal content renders text + an image marker — base64 NEVER prints', async () => {
+    const root = tempProject();
+    try {
+      const s = newSession('pic', 'm');
+      s.messages = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is in this picture' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,SECRETBASE64PAYLOAD' } },
+          ],
+        },
+      ];
+      saveSession(root, s);
+      const { io, cap } = capturedIo();
+      await runSessions(ctx(io), 'show', 'pic', { cwd: root });
+      const text = cap.out.join('\n');
+      expect(text).toContain('what is in this picture');
+      expect(text).toContain('[image attached]');
+      expect(text).not.toContain('SECRETBASE64PAYLOAD');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

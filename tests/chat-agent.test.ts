@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -73,6 +73,27 @@ function ctx(io: CliIo, json = false): CliContext {
   return { debug: false, json, apiUrl: server.url, io };
 }
 
+// v0.6: chat auto-saves into <cwd>/.selora/sessions/ — every REPL test gets a
+// fresh temp project so nothing is written into the repo and no resume offer
+// leaks across tests.
+const chatDirs: string[] = [];
+function chatCwd(): string {
+  const d = mkdtempSync(join(tmpdir(), 'selora-chat-'));
+  chatDirs.push(d);
+  // the tool-loop tests read this file (stand-in for the repo's own)
+  mkdirSync(join(d, 'src'), { recursive: true });
+  writeFileSync(
+    join(d, 'src', 'index.ts'),
+    "import { realpathSync } from 'node:fs';\nexport const x = 1;\n",
+    'utf8',
+  );
+  return d;
+}
+
+afterAll(() => {
+  for (const d of chatDirs) rmSync(d, { recursive: true, force: true });
+});
+
 /** routes: models always OK; chat rounds then the plain answer. */
 function routeToolRounds(rounds: number): void {
   let chatCalls = 0;
@@ -98,7 +119,7 @@ describe('chat agent — startup screen + tool round-trip', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     routeToolRounds(0);
     const { io, cap } = replIo(['/exit']);
-    await runChat(ctx(io), {});
+    await runChat(ctx(io), { cwd: chatCwd() });
     const out = cap.out();
     // v0.5: the version/model/cwd/plan box is gone — the prompt's status
     // lines carry that context now
@@ -126,7 +147,7 @@ describe('chat agent — startup screen + tool round-trip', () => {
     const before = server.requests.length;
     // 'y' answers the permission prompt through the SHARED readline queue
     const { io, cap } = replIo(['read it', 'y', '/exit']);
-    await runChat(ctx(io), {});
+    await runChat(ctx(io), { cwd: chatCwd() });
 
     const err = cap.err();
     // the v0.2 line-based permission box (piped stdin has no raw mode)
@@ -158,7 +179,7 @@ describe('chat agent — startup screen + tool round-trip', () => {
     routeToolRounds(1);
     const before = server.requests.length;
     const { io, cap } = replIo(['read it', 'n', '/exit']);
-    await runChat(ctx(io), {});
+    await runChat(ctx(io), { cwd: chatCwd() });
     const err = cap.err();
     // the rich display's ⎿ line carries the denial
     expect(err).toContain('denied by user');
@@ -190,26 +211,19 @@ describe('chat agent — startup screen + tool round-trip', () => {
       }
       return { status: 404, body: NOT_FOUND };
     });
-    // The REPL's sandbox root is the process cwd — run this test from a temp
-    // dir so the write lands there, not in the repository.
-    const sandbox = mkdtempSync(join(tmpdir(), 'selora-chat-agent-'));
-    const prevCwd = process.cwd();
-    process.chdir(sandbox);
-    try {
-      const { io, cap } = replIo(['write it', 'y', '/exit']);
-      await runChat(ctx(io), {});
-      const text = cap.all();
-      expect(text).toContain('● Write(out.txt)');
-      // the file really appeared in the sandbox
-      expect(existsSync(join(sandbox, 'out.txt'))).toBe(true);
-      // the exit summary names the change
-      expect(text).toContain('1 file change');
-      expect(text).toContain('write_file(out.txt)');
-      expect(text).toContain('Session ended');
-    } finally {
-      process.chdir(prevCwd);
-      rmSync(sandbox, { recursive: true, force: true });
-    }
+    // The REPL's sandbox root is the session cwd — a temp dir, so the write
+    // lands there, not in the repository.
+    const sandbox = chatCwd();
+    const { io, cap } = replIo(['write it', 'y', '/exit']);
+    await runChat(ctx(io), { cwd: sandbox });
+    const text = cap.all();
+    expect(text).toContain('● Write(out.txt)');
+    // the file really appeared in the sandbox
+    expect(existsSync(join(sandbox, 'out.txt'))).toBe(true);
+    // the exit summary names the change
+    expect(text).toContain('1 file change');
+    expect(text).toContain('write_file(out.txt)');
+    expect(text).toContain('Session ended');
   });
 });
 
@@ -227,7 +241,7 @@ describe('chat agent — slash commands', () => {
       '/clear',
       '/exit',
     ]);
-    await runChat(ctx(io), {});
+    await runChat(ctx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('Tools (18, mode: manual): read_file');
     expect(text).toContain('Nothing auto-allowed yet');
@@ -245,7 +259,7 @@ describe('chat agent — slash commands', () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     routeToolRounds(0);
     const { io, cap } = replIo(['/model no-such-model', '/exit']);
-    await runChat(ctx(io), {});
+    await runChat(ctx(io), { cwd: chatCwd() });
     const text = cap.all();
     expect(text).toContain('✗ Model not available');
     expect(text).not.toContain('Switched to');

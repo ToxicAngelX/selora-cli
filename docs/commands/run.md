@@ -7,6 +7,19 @@ carries the tool definitions, and when the model actually requests tools on
 the wire, each call goes through the permission gate before it executes.
 See [docs/agent.md](../agent.md) for the full sandbox and permission model.
 
+The prompt is variadic — `selora run check @img.png` works unquoted — and
+`@<path>` tokens attach **images** (since v0.6, same rules as
+[chat](chat.md#images-v06): png/jpg/jpeg/webp/gif, ≤4 MB each, max 4):
+
+```
+$ selora run "what is in @diagram.png"
+· [image: diagram.png, 88.2 KB]
+It's a sequence diagram of the login flow…
+```
+
+A bad reference (missing file, too large, too many) exits 1 **before** any
+request. An image-only prompt (`selora run @shot.png`) is valid.
+
 ```
 $ selora run "what does src/index.ts do?"
 → read_file(src/index.ts)
@@ -76,10 +89,13 @@ The model that actually ran is saved into the session.
 ## Sessions
 
 `--session <name>` persists the conversation in
-`.selora/sessions/<name>.json` (project-local, atomic write). The session
-**advances only on completed runs** — a run that dies mid-stream never
-writes. The next `--session <name>` run resumes the full history, including
-tool calls and results. Names are validated to a conservative slug set
+`.selora/sessions/<name>.json` (project-local, atomic write). Since v0.6 the
+session is **crash-safe**: it advances at every resumable checkpoint, so a
+run that is interrupted (Ctrl+C — a clean abort, exit 130) or fails mid-run
+saves the turns completed so far, never mid-turn state. A run interrupted
+before the first checkpoint writes nothing. The next `--session <name>` run —
+or `selora resume <name>` — resumes the full history, including tool calls
+and results. Names are validated to a conservative slug set
 (letters, digits, dash, underscore, dot; alphanumeric first; 1–64 chars).
 Manage saved sessions with `selora sessions` (see
 [sessions.md](sessions.md)).

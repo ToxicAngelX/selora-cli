@@ -1,36 +1,34 @@
 /**
  * `selora chat [--model <id>] [--safe] [--yes]` — the interactive agent REPL
- * (v0.5: pinned ambient banner, permission modes, no thinking text).
+ * (v0.6: crash-safe sessions, resume, image input).
  *
- * What changed in v0.5 (docs/commands/chat.md):
- *  - the startup info box (version/model/cwd/plan) is GONE — the prompt's
- *    status lines carry that context now;
- *  - on a color-capable TTY the logo/starfield banner is PINNED to the top
- *    of the screen (a DECSTBM scroll region below it) and keeps twinkling
- *    forever at a slow ambient rate (AMBIENT_INTERVAL_MS); the transcript
- *    scrolls underneath. SELORA_NO_ANIMATE / NO_COLOR / mono / short
- *    terminals fall back to the classic inline static screen. Tradeoff,
- *    honestly: lines that scroll out of the region are not added to the
- *    terminal's scrollback — the session transcript lives on screen only;
- *  - reasoning ("thinking") deltas are NO LONGER printed — while the model
- *    thinks, the spinner shows a shimmering `✦ Thinking…`; content deltas
- *    still stream live;
- *  - permission MODES with a status line (`⏸ manual mode on · ? for
- *    shortcuts`): manual (everything asks) → acceptEdits (reads+writes run,
- *    exec and outside-root still ask) → auto (everything runs except
- *    neverAutoAllow deletions, which always ask). shift+tab cycles at the
- *    prompt; --safe pins a read-only display mode; --yes starts in auto;
- *  - the prompt no longer reprints its status lines on an empty Enter —
- *    a bare ❯ reprompts (the "duplicated lines" fix).
+ * What changed in v0.6 (docs/commands/chat.md):
+ *  - the conversation is NO LONGER in-memory only: after every COMPLETED turn
+ *    it is saved (atomically) to `.selora/sessions/chat.json` — a crash or a
+ *    kill loses nothing that completed. Aborted/failed turns are still dropped
+ *    entirely (a half-finished turn would corrupt the wire history);
+ *  - on launch, a saved non-empty chat session triggers a one-line
+ *    `Resume the previous session? [y/N]` offer (never silent auto-resume —
+ *    the user may want a fresh start). `selora resume [name]` opens a saved
+ *    session directly (any name, or the most recent) with no question;
+ *  - `@<path>` tokens in a message attach local images (png/jpg/jpeg/webp/gif,
+ *    ≤4 MB, max 4 per message) as image_url parts; the transcript shows
+ *    `[image: name, 12.4 KB]` — base64 never prints.
+ *
+ * Kept v0.5 behavior: the pinned ambient banner (DECSTBM scroll region,
+ * ambient twinkle) with the honest scrollback tradeoff; permission MODES with
+ * the status line (shift+tab cycles manual → acceptEdits → auto; --safe pins
+ * a read-only display mode; --yes starts in auto); reasoning never printed
+ * (the spinner's `✦ Thinking…` carries it); the prompt reprompts BARE on an
+ * empty Enter.
  *
  * Kept v0.3/v0.4 behavior: the agent loop with the full toolset per message
  * (permission-gated per call; --safe restricts to read-only tools), the
  * markdown-streaming renderer, the tool-call display with colored diffs,
  * the galaxy spinner while a reply streams, slash commands (/help /model
  * /theme /clear /tools /permissions /cost /exit), the session summary on
- * exit. In-memory-only history (aborted/failed turns dropped entirely),
- * footers ONLY when the usage chunk actually arrived, Ctrl+C aborts a reply
- * and keeps the session, Ctrl+D/Ctrl+C at the prompt exits.
+ * exit. Footers ONLY when the usage chunk actually arrived, Ctrl+C aborts a
+ * reply and keeps the session, Ctrl+D/Ctrl+C at the prompt exits.
  */
 
 import * as readline from 'node:readline';
@@ -62,6 +60,13 @@ import { createModeAsker, modeStatusLine, nextMode, type PermissionMode } from '
 import type { Tool } from '../agent/tool.js';
 import { themeFor, isThemeName, THEME_NAMES, type ThemeName } from '../ui/theme.js';
 import {
+  loadSession,
+  saveSession,
+  SESSION_VERSION,
+  type StoredSession,
+} from '../agent/session/store.js';
+import { imageMarker, parseImageInput, userMessageContent } from '../images.js';
+import {
   AMBIENT_DRIFT,
   AMBIENT_INTERVAL_MS,
   STARTUP_FRAME_COUNT,
@@ -88,6 +93,18 @@ export interface ChatFlags {
   safe?: boolean;
   /** Auto-approve tool execution (non-interactive; still filtered by --safe). */
   yes?: boolean;
+  /**
+   * Project root for the session store and the agent sandbox (defaults to
+   * process.cwd()). The test seam: suites pass a temp dir so chat auto-save
+   * never writes into the real repo.
+   */
+  cwd?: string | undefined;
+  /**
+   * Open this saved session directly (set by `selora resume [name]`): no
+   * resume question, the history is seeded, and auto-save continues under the
+   * same name.
+   */
+  resumeName?: string | undefined;
 }
 
 /**
@@ -181,32 +198,31 @@ export async function runChat(
     logger: ctx.io.err,
   });
 
-  const flagModel = flags.model !== undefined ? flags.model.trim() : '';
-  const wanted =
-    flagModel !== '' ? flagModel : (loadConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK);
-
-  let current: SessionModel;
-  try {
-    current = await verifyModel(client, wanted);
-  } catch (err) {
-    // Unknown model: the backend's own "Model not available" message, verbatim,
-    // plus the listing hint. The REPL is NOT started on a bad model.
-    process.exitCode = 1;
-    if (err instanceof SeloraApiError) {
-      if (err.status === 404) {
-        if (ctx.json) r.jsonOut({ ok: false, error: err.toJson() });
-        else {
-          r.fail(err.apiMessage ?? err.message);
-          r.bullet('List available models with: selora models');
-        }
-        return;
-      }
-      r.renderError(err);
+  // ------------------------------------------------------------------
+  // Session state (v0.6). The conversation auto-saves to
+  // .selora/sessions/<name>.json after every completed turn — `chat` for a
+  // bare `selora chat`, the given name for `selora resume <name>`. An
+  // explicit resume skips the launch question; a bare chat with a saved
+  // non-empty chat.json asks once (never silent auto-resume).
+  // ------------------------------------------------------------------
+  const cwd = flags.cwd ?? process.cwd();
+  const sessionName = flags.resumeName ?? 'chat';
+  let resumed: StoredSession | null = null;
+  if (flags.resumeName !== undefined) {
+    resumed = loadSession(cwd, flags.resumeName);
+    if (resumed === null) {
+      process.exitCode = 1;
+      const message = `no session named "${flags.resumeName}" in this project`;
+      if (ctx.json) r.jsonOut({ ok: false, error: { kind: 'internal', message } });
+      else r.fail(message);
       return;
     }
-    r.renderError(err);
-    return;
   }
+  // The pending resume offer (bare chat only, never --json automation).
+  const savedChat = flags.resumeName === undefined ? loadSession(cwd, 'chat') : null;
+  const offerPending = !ctx.json && savedChat !== null && savedChat.messages.length > 0;
+
+  const flagModel = flags.model !== undefined ? flags.model.trim() : '';
 
   // The galaxy theme. Color level keys off the REAL stdout (a captured test
   // io is "TTY" but a piped stdout is not — NO_COLOR/non-TTY stay plain).
@@ -337,14 +353,14 @@ export async function runChat(
     }
   }
 
-  r.ok(`Connected to ${modelLabel(current)}`);
-
   // Persistent readline interface over stdin (the buffering pattern from
   // auth/prompts.ts): lines queue while a turn is streaming, prompts go to
-  // stderr, and readline's own echo is forwarded to raw stdout.
+  // stderr, and readline's own echo is forwarded to raw stdout — except in
+  // --json mode, where stdout carries ONLY reply text (echoed input would
+  // pollute the machine channel).
   const echo = new Writable({
     write(chunk: Buffer, _enc: BufferEncoding, cb: (err?: Error | null) => void): void {
-      ctx.io.writeOut(chunk.toString());
+      if (!ctx.json) ctx.io.writeOut(chunk.toString());
       cb();
     },
   });
@@ -389,6 +405,64 @@ export async function runChat(
     return new Promise<string>((resolve, reject) => {
       waiters.push({ resolve, reject });
     });
+  }
+
+  // The resume offer (v0.6): a bare `selora chat` with a saved non-empty
+  // chat.json asks ONCE — one keystroke, never a silent auto-resume. The
+  // question rides the REPL's own line queue, so typed-ahead input survives.
+  // Any answer other than y/yes (including Ctrl+D) starts fresh; the saved
+  // session stays on disk either way.
+  if (offerPending && savedChat !== null) {
+    ctx.io.writeErr(
+      `Resume the previous session? (${savedChat.messages.length} messages, updated ${savedChat.updatedAt}) [y/N] `,
+    );
+    let answer = '';
+    try {
+      answer = (await nextLine()).trim().toLowerCase();
+    } catch {
+      answer = ''; // prompt closed (Ctrl+D) — start fresh
+    }
+    if (answer === 'y' || answer === 'yes') resumed = savedChat;
+  }
+
+  // Model resolution: --model > the resumed session's model > the configured
+  // default > the built-in fallback. (Resolved AFTER the offer so an accepted
+  // session's model applies — and a declined one never does.)
+  const wanted =
+    flagModel !== ''
+      ? flagModel
+      : resumed !== null && resumed.model !== ''
+        ? resumed.model
+        : (loadConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK);
+
+  let current: SessionModel;
+  try {
+    current = await verifyModel(client, wanted);
+  } catch (err) {
+    // Unknown model: the backend's own "Model not available" message, verbatim,
+    // plus the listing hint. The REPL is NOT started on a bad model.
+    process.exitCode = 1;
+    unpin();
+    rl.close();
+    if (err instanceof SeloraApiError) {
+      if (err.status === 404) {
+        if (ctx.json) r.jsonOut({ ok: false, error: err.toJson() });
+        else {
+          r.fail(err.apiMessage ?? err.message);
+          r.bullet('List available models with: selora models');
+        }
+        return;
+      }
+      r.renderError(err);
+      return;
+    }
+    r.renderError(err);
+    return;
+  }
+
+  r.ok(`Connected to ${modelLabel(current)}`);
+  if (resumed !== null) {
+    r.bullet(`Resumed session "${sessionName}" — ${resumed.messages.length} messages restored`);
   }
 
   // The permission mode (v0.5): shift+tab cycles manual → acceptEdits → auto
@@ -462,7 +536,7 @@ export async function runChat(
   const tools: Tool[] = flags.safe
     ? builtinTools().filter((t) => t.kind === 'read')
     : builtinTools();
-  const maxTurns = loadProjectConfig(process.cwd()).agent?.maxTurns ?? DEFAULT_MAX_TURNS;
+  const maxTurns = loadProjectConfig(cwd).agent?.maxTurns ?? DEFAULT_MAX_TURNS;
 
   const renderDiff = (before: string, after: string): readonly string[] =>
     renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 });
@@ -497,7 +571,37 @@ export async function runChat(
     ctx.io.writeErr(`${theme.gradient('❯')} `);
   }
 
-  const history: ChatMessage[] = [];
+  // The conversation — seeded from the resumed session when there is one.
+  const history: ChatMessage[] = resumed !== null ? [...resumed.messages] : [];
+
+  // Crash-safe auto-save (v0.6): after every COMPLETED turn the history is
+  // written atomically to .selora/sessions/<name>.json. A save failure never
+  // breaks the REPL — it is reported once and the conversation continues in
+  // memory.
+  const sessionCreatedAt = resumed?.createdAt ?? new Date().toISOString();
+  let savedOnce = resumed !== null;
+  let saveWarned = false;
+  function persistSession(): void {
+    const toSave: StoredSession = {
+      version: SESSION_VERSION,
+      name: sessionName,
+      model: current.id,
+      createdAt: sessionCreatedAt,
+      updatedAt: sessionCreatedAt, // saveSession refreshes it
+      messages: [...history],
+    };
+    try {
+      saveSession(cwd, toSave);
+      savedOnce = true;
+    } catch (err) {
+      if (!saveWarned) {
+        saveWarned = true;
+        r.bullet(
+          `could not save the chat session (${err instanceof Error ? err.message : String(err)}) — the conversation continues in memory`,
+        );
+      }
+    }
+  }
 
   // fullPrompt: the status lines print once per real turn; an empty line
   // reprompts bare. promptActive gates the shift+tab mode cycling.
@@ -578,6 +682,8 @@ export async function runChat(
     }
     if (trimmed === '/clear') {
       history.length = 0;
+      // Clear the saved session too — "clear" must not resurrect on resume.
+      persistSession();
       r.bullet('History cleared.');
       continue;
     }
@@ -629,8 +735,22 @@ export async function runChat(
       continue;
     }
 
+    // Images (v0.6): `@<path>` tokens attach local files as image_url parts.
+    // A parse failure (missing file, >4 MB, more than 4) sends NOTHING — the
+    // user fixes and retypes; the turn never starts.
+    const parsed = parseImageInput(trimmed, cwd);
+    if (!parsed.ok) {
+      r.fail(parsed.error);
+      continue;
+    }
+    if (parsed.text === '' && parsed.images.length === 0) continue; // only whitespace/escapes
+
     // A chat turn: the agent loop with the full in-memory history.
-    history.push({ role: 'user', content: trimmed });
+    for (const img of parsed.images) {
+      // The transcript marker — base64 NEVER prints.
+      ctx.io.writeOut(`${theme.dim(imageMarker(img))}\n`);
+    }
+    history.push({ role: 'user', content: userMessageContent(parsed.text, parsed.images) });
     const controller = new AbortController();
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
@@ -644,7 +764,7 @@ export async function runChat(
         messages: [...history],
         tools,
         maxTurns,
-        cwd: process.cwd(),
+        cwd,
         permissions,
         // Modes own approval now; the loop-level bypass is kept ONLY for
         // --json --yes (machine runs — its legacy hands-free semantics).
@@ -708,6 +828,8 @@ export async function runChat(
       // The loop returned — the history is consistent; adopt it.
       history.length = 0;
       history.push(...result.messages);
+      // Crash-safe: the completed turn is on disk from this moment.
+      persistSession();
       sessionRequests += 1;
       if (result.usageTotal !== undefined) sessionTokens += result.usageTotal.totalTokens;
       if (result.chargeTotalMicro !== undefined) {
@@ -775,5 +897,11 @@ export async function runChat(
     );
   }
   r.gray(`· ${parts.join(' · ')}`);
+  // Discoverability: a saved non-empty conversation is resumable.
+  if (savedOnce && history.length > 0) {
+    r.gray(
+      `· Conversation saved — resume it with: selora resume${sessionName === 'chat' ? '' : ` ${sessionName}`}`,
+    );
+  }
   r.ok('Session ended');
 }

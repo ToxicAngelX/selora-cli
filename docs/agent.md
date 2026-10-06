@@ -203,18 +203,31 @@ so the agent can still read `package.json` or `README.md`.
 
 ## Sessions
 
-`selora run --session <name> "<prompt>"` keeps the conversation:
+`selora run --session <name> "<prompt>"` keeps the conversation, and since
+v0.6 `selora chat` auto-saves to `.selora/sessions/chat.json` after every
+completed turn:
 
 - State lives in `<project>/.selora/sessions/<name>.json` — project-local,
-  visible, gitignore-able, written atomically (tmp + rename).
-- A session **advances only on completed runs** — a run that dies mid-stream
-  never writes.
-- The next `--session <name>` run resumes the full wire-shaped history
-  (including tool calls and results); the session's model is used unless
-  `--model` overrides it.
+  visible, gitignore-able, written atomically (tmp + rename), so a crash
+  mid-write can never corrupt the previous save.
+- **Crash-safe (v0.6)**: a `run --session` that is interrupted (Ctrl+C) or
+  fails mid-run saves the turns completed SO FAR — the loop reports the
+  history at every resumable checkpoint (never mid-turn: an assistant
+  tool_calls message without its tool results is invalid on the wire).
+  Chat's per-turn auto-save is the same guarantee for the REPL.
+- **Resume (v0.6)**: `selora resume [name]` opens any saved session in the
+  chat REPL with the full history restored; a bare `selora chat` with a saved
+  session asks the one-line `Resume the previous session? [y/N]` question.
+- The next run resumes the full wire-shaped history (including tool calls,
+  results, and image parts); the session's model is used unless `--model`
+  overrides it.
+- Session format **v2** adds multimodal user content (image parts). v1 files
+  load unchanged and are rewritten as v2 on the next save; a newer version is
+  reported and skipped, never mangled.
 - `selora sessions list` / `show <name>` / `rm <name>` manage them. `show`
   renders through the redaction chokepoint — key material an agent read into
-  a conversation never prints.
+  a conversation never prints, and image data URLs render as
+  `[image attached]`.
 
 ## A sample session
 

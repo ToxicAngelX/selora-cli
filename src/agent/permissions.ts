@@ -71,6 +71,13 @@ export interface PermissionAsker {
    * the user submits nothing (treated as deny).
    */
   replacement(current: string): Promise<string | null>;
+  /**
+   * Release held resources (the asker's OWN readline over stdin, when it has
+   * one). v0.6: `run` must call this when finished — an open readline over a
+   * TTY keeps the event loop alive and the process would never exit. No-op
+   * for askers that share the caller's line source (chat) or hold nothing.
+   */
+  close?: (() => void) | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +398,9 @@ export function createInteractiveAsker(io: InteractiveAskerIo): PermissionAsker 
         return null;
       }
     },
+    // Only an OWNED readline needs closing (a shared line source — the chat
+    // REPL — is closed by its owner).
+    close: ownRl !== undefined ? () => ownRl.close() : undefined,
   };
 }
 

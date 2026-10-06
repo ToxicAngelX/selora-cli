@@ -38,8 +38,28 @@ export interface WireToolDefinition {
   };
 }
 
+/** A text part of a multimodal user message (v0.6). */
+export interface ChatTextPart {
+  type: 'text';
+  text: string;
+}
+
+/**
+ * An image part of a multimodal user message (v0.6). The CLI only ever builds
+ * data: URLs (a local file, base64-encoded); the gateway verified live that
+ * image_url parts are accepted (video_url is not).
+ */
+export interface ChatImagePart {
+  type: 'image_url';
+  image_url: { url: string };
+}
+
+/** The exact part union — deliberately narrow, no record passthrough. */
+export type ChatUserContentPart = ChatTextPart | ChatImagePart;
+
 export type ChatMessage =
-  | { role: 'user' | 'system'; content: string }
+  | { role: 'user'; content: string | ChatUserContentPart[] }
+  | { role: 'system'; content: string }
   | { role: 'assistant'; content: string | null; tool_calls?: WireToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 
