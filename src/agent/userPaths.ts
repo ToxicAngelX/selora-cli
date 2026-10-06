@@ -86,16 +86,28 @@ function insideDir(dir: string, candidate: string, platform: NodeJS.Platform): b
 }
 
 /** realpath when the whole path exists; else realpath of the deepest existing ancestor + the rest. */
-function resolveRealPath(candidate: string): string {
+/**
+ * realpath when the whole path exists; else realpath of the deepest existing
+ * ancestor + the rest. Platform-aware: a Windows drive prefix ('D:') is the
+ * drive's CURRENT directory, never the drive root — resolving 'D:\new\file'
+ * through realpath('D:') would silently re-anchor it at the process cwd
+ * (possibly inside the project root, defeating containment). The ancestor
+ * walk therefore tests 'D:\' for drive paths.
+ */
+function resolveRealPath(candidate: string, platform: NodeJS.Platform): string {
   const direct = safeRealpath(candidate);
   if (direct !== undefined) return direct;
-  const parts = candidate.split(sep);
+  const s = sepFor(platform);
+  const parts = candidate.split(s);
   for (let i = parts.length; i > 0; i -= 1) {
-    const prefix = parts.slice(0, i).join(sep);
-    const real = safeRealpath(prefix === '' ? sep : prefix);
+    let prefix = parts.slice(0, i).join(s);
+    if (prefix === '') prefix = s;
+    // 'D:' alone = current dir on drive D — the drive root is 'D:\'.
+    if (platform === 'win32' && i === 1 && /^[a-zA-Z]:$/.test(prefix)) prefix += s;
+    const real = safeRealpath(prefix);
     if (real === undefined) continue;
-    const rest = parts.slice(i).join(sep);
-    return rest === '' ? real : `${real}${sep}${rest}`;
+    const rest = parts.slice(i).join(s);
+    return rest === '' ? real : `${real}${s}${rest}`;
   }
   return candidate;
 }
@@ -217,7 +229,7 @@ export function resolveUserPath(
   // strings, which resolve() would mangle on a POSIX host).
   const normalized =
     o.platform === 'win32' && isAbsFor('win32', candidate) ? candidate : resolve(candidate);
-  const abs = resolveRealPath(normalized);
+  const abs = resolveRealPath(normalized, o.platform);
 
   if (insideDir(rootReal, abs, o.platform)) {
     return {

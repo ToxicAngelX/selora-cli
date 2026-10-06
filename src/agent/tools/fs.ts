@@ -72,6 +72,10 @@ const POSIX_SYSTEM_DIRS: readonly string[] = [
   '/proc',
   '/sys',
   '/System',
+  // macOS: /etc and /var are symlinks into /private — paths arrive
+  // realpath-resolved, so the guard must know the REAL destinations too.
+  '/private/etc',
+  '/private/var',
 ];
 
 const WIN_SYSTEM_DIRS: readonly string[] = [

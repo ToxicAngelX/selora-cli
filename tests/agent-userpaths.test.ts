@@ -25,6 +25,14 @@ function tempRoot(): string {
   return realpathSync(mkdtempSync(join(tmpdir(), 'selora-userpaths-')));
 }
 
+/**
+ * POSIX-semantics tests: these exercise the home-alias branches with real
+ * host temp dirs and no platform injection, so they would take the win32
+ * branches (real USERPROFILE) on a Windows runner. The win32 equivalents
+ * exist separately with fully injected fake envs — skip here.
+ */
+const itPosix = process.platform === 'win32' ? it.skip : it;
+
 describe('expandPathVars', () => {
   it('expands $VAR, ${VAR}, and %VAR%; unknown vars are left as written', () => {
     const env = { HOME: '/users/ada', PROJECT: 'nebula', APPDATA: 'C:\\Data' };
@@ -37,7 +45,7 @@ describe('expandPathVars', () => {
 });
 
 describe('resolveAliasDir', () => {
-  it('POSIX: $HOME/<Name> when it exists; null-ish fallback when nothing exists', () => {
+  itPosix('POSIX: $HOME/<Name> when it exists; null-ish fallback when nothing exists', () => {
     const dir = tempRoot();
     try {
       mkdirSync(join(dir, 'Desktop'), { recursive: true });
@@ -135,7 +143,7 @@ describe('resolveUserPath — inside the project root', () => {
 });
 
 describe('resolveUserPath — outside the project root', () => {
-  it('~, aliases, absolute paths, and .. climbs all resolve to realpathed OUTSIDE paths', () => {
+  itPosix('~, aliases, absolute paths, and .. climbs all resolve to realpathed OUTSIDE paths', () => {
     // macOS note: realpath — tmpdir may sit behind a symlink (/var → /private/var).
     const outer = realpathSync(mkdtempSync(join(tmpdir(), 'selora-userpaths-')));
     try {
