@@ -459,13 +459,13 @@ describe('removeGuard', () => {
     expect(removeGuard('\\\\server\\share\\work', { platform: 'win32' }).ok).toBe(true);
   });
 
-  it('macOS: /private/etc and /private/var (the realpathed forms of /etc, /var) are refused', () => {
+  it('macOS: /private/etc (the realpathed form of /etc) is refused', () => {
     // paths arrive realpath-resolved — on macOS '/etc/x' becomes '/private/etc/x'
     expect(removeGuard('/private/etc', { platform: 'darwin' }).ok).toBe(false);
     expect(removeGuard('/private/etc/agent-test', { platform: 'darwin' }).ok).toBe(false);
-    expect(removeGuard('/private/var/db', { platform: 'darwin' }).ok).toBe(false);
-    // unrelated /private paths are fine
-    expect(removeGuard('/private/tmp/scratch', { platform: 'darwin' }).ok).toBe(true);
+    // /private/var must NOT be guarded: macOS temp dirs live under
+    // /private/var/folders — guarding it would refuse all temp work
+    expect(removeGuard('/private/var/folders/xy/scratch', { platform: 'darwin' }).ok).toBe(true);
   });
 
   it('refuses the home directory itself (case-insensitive on win32) but not paths inside it', () => {

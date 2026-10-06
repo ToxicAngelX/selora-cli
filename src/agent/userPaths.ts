@@ -107,7 +107,10 @@ function resolveRealPath(candidate: string, platform: NodeJS.Platform): string {
     const real = safeRealpath(prefix);
     if (real === undefined) continue;
     const rest = parts.slice(i).join(s);
-    return rest === '' ? real : `${real}${s}${rest}`;
+    if (rest === '') return real;
+    // realpath of a root ('D:\', '/') already ends with the separator —
+    // appending another would yield 'D:\\data' / '//data'.
+    return real.endsWith(s) ? `${real}${rest}` : `${real}${s}${rest}`;
   }
   return candidate;
 }
