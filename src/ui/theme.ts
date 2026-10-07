@@ -114,14 +114,24 @@ export function isThemeName(name: string): name is ThemeName {
 // ---------------------------------------------------------------------------
 
 /**
- * Detect the color level for a stream. NO_COLOR (any value) and TERM=dumb and
- * a non-TTY stream are level 0 — no escapes, ever. Truecolor signals
- * (COLORTERM, 24bit, truecolor, kitty, Windows Terminal's WT_SESSION) are 3;
- * TERM*xterm-256color* is 2; a plain TTY is 1 (conservative).
+ * Detect the color level for a stream. FORCE_COLOR (any non-'0' value) forces
+ * color even on a non-TTY (CI logs — the chalk convention: '3' → truecolor,
+ * '2' → 256, anything else truthy → basic 16; '0'/'false' → 0). Otherwise
+ * NO_COLOR (any value), TERM=dumb, or a non-TTY stream are level 0 — no
+ * escapes, ever. Truecolor signals (COLORTERM, 24bit, truecolor, kitty,
+ * Windows Terminal's WT_SESSION) are 3; TERM*xterm-256color* is 2; a plain
+ * TTY is 1 (conservative).
  */
 export function colorLevelFor(isTTY: boolean, env: NodeJS.ProcessEnv = process.env): ColorLevel {
-  if (!isTTY) return 0;
+  const force = env['FORCE_COLOR'];
+  if (force !== undefined) {
+    if (force === '0' || force === 'false') return 0;
+    if (force === '2') return 2;
+    if (force === '3') return 3;
+    return 1;
+  }
   if (env['NO_COLOR'] !== undefined) return 0;
+  if (!isTTY) return 0;
   const term = env['TERM'] ?? '';
   if (term === 'dumb') return 0;
   const colorterm = (env['COLORTERM'] ?? '').toLowerCase();

@@ -36,6 +36,7 @@ import { parseMoneyMicro, microToWireString } from '../money.js';
 import type { Tool, ToolKind } from './tool.js';
 import { grantDirFor } from './userPaths.js';
 import { PLAN_MODE_DENY_REASON } from './modes.js';
+import type { ReviewDecision } from '../diff/types.js';
 import {
   createAutoAsker,
   SessionAllows,
@@ -113,6 +114,39 @@ export interface PlanGate {
   onProposal: (label: string) => void;
 }
 
+/**
+ * v1.3 diff-review pipeline (the chat TTY path). When present, write tools
+ * whose dry run carries a diff payload (write_file, edit_file) are approved
+ * through the interactive review UI instead of the generic permission gate,
+ * and applied through a guarded writer (path guard + conflict check + atomic
+ * write + history checkpoint) instead of the tool's own real run. Both halves
+ * are provided together by the caller — review without apply would strand the
+ * write. Absent → the v0.2/v0.3 flow is byte-identical.
+ */
+export interface FileChangeHooks {
+  /** Present the change; collect the user's decision. Never writes. */
+  review: (change: {
+    path: string;
+    before: string;
+    after: string;
+    kind: 'created' | 'modified' | 'deleted';
+    label: string;
+  }) => Promise<ReviewDecision>;
+  /**
+   * Apply an approved change (guarded + atomic + checkpointed by the caller).
+   * `acceptedHunks` set → apply only those hunks of the diff (partial apply).
+   */
+  apply: (
+    change: {
+      path: string;
+      before: string;
+      after: string;
+      kind: 'created' | 'modified' | 'deleted';
+    },
+    acceptedHunks: readonly number[] | undefined,
+  ) => Promise<{ ok: boolean; summary: string }>;
+}
+
 export interface AgentLoopOptions {
   client: SeloraClient;
   model: string;
@@ -130,8 +164,10 @@ export interface AgentLoopOptions {
    * v0.3: renders a ToolResult diff {before, after} into styled lines for the
    * permission prompt and the rich tool display (theme + ui/diff). Absent →
    * diffs are simply not rendered (plain text paths unchanged).
+   * v1.3: the optional third argument is the diff's display path (renderer
+   * picks the header title and syntax language from it).
    */
-  renderDiff?: ((before: string, after: string) => readonly string[]) | undefined;
+  renderDiff?: ((before: string, after: string, path?: string) => readonly string[]) | undefined;
   callbacks: AgentLoopCallbacks;
   signal?: AbortSignal | undefined;
   /**
@@ -142,6 +178,27 @@ export interface AgentLoopOptions {
   allows?: SessionAllows | undefined;
   /** v0.9: plan mode — mutating tool calls become recorded proposals. */
   planGate?: PlanGate | undefined;
+  /**
+   * v1.3: dry-run mode (permissions.mode 'dry-run') — write/exec tools run
+   * their DRY RUN only: the proposed change (with its diff) is shown and the
+   * model is told plainly that nothing was written. Read tools run normally.
+   */
+  dryRun?: boolean | undefined;
+  /** v1.3: the interactive file-change review pipeline (see FileChangeHooks). */
+  fileChange?: FileChangeHooks | undefined;
+  /**
+   * v1.3: fired after a successful REAL run that carried a diff payload — the
+   * session-history checkpoint hook. Not fired for changes applied through
+   * fileChange.apply (the applier checkpoints itself).
+   */
+  onFileChange?:
+    | ((rec: {
+        path: string;
+        before: string;
+        after: string;
+        kind: 'created' | 'modified' | 'deleted';
+      }) => void)
+    | undefined;
 }
 
 export interface AgentToolEvent {
@@ -391,6 +448,46 @@ async function executeToolCall(
     return 'denied';
   }
 
+  // v1.3 dry-run mode (permissions.mode 'dry-run'): write/exec tools run
+  // their DRY RUN ONLY — before any auto-allow/auto-approve shortcut, so the
+  // mode is honest even under --yes: the proposed change (preview + styled
+  // diff) is shown and the model is told plainly that nothing was written.
+  if (opts.dryRun === true && tool.kind !== 'read') {
+    const dry = await tool.run(input, { cwd, dryRun: true, outsideDirs: allows.outsideDirs() });
+    if (!dry.ok) {
+      cb.onActivity?.(`✗ ${dry.summary}`);
+      cb.onToolResult?.({
+        name: tool.name,
+        label,
+        kind: tool.kind,
+        ok: false,
+        summary: dry.summary,
+      });
+      reply(dry.summary);
+      toolEvents.push({ name: tool.name, label, ok: false, summary: dry.summary });
+      return 'failed';
+    }
+    const styledDry =
+      dry.diff !== undefined
+        ? opts.renderDiff?.(dry.diff.before, dry.diff.after, dry.diff.path)
+        : undefined;
+    const summary = `[dry-run] ${dry.summary}`;
+    cb.onActivity?.(`· ${summary}`);
+    cb.onToolResult?.({
+      name: tool.name,
+      label,
+      kind: tool.kind,
+      ok: true,
+      summary,
+      diff: styledDry,
+    });
+    reply(
+      `${dry.summary}\nDRY-RUN MODE: the proposed change was shown to the user but NOTHING was written or executed. Do not assume the change exists; say what WOULD happen instead.`,
+    );
+    toolEvents.push({ name: tool.name, label, ok: true, summary });
+    return 'denied'; // leaves the consecutive-failure breaker untouched
+  }
+
   // Session auto-allow from an earlier 'a' answer (memory-only). Tools that
   // must always ask (remove) are exempt even in always-allow mode.
   if (tool.neverAutoAllow !== true && allows.check(tool.kind, tool.name, label)) {
@@ -419,7 +516,9 @@ async function executeToolCall(
     return 'failed';
   }
   preview = dry.preview ?? dry.summary;
-  if (dry.diff !== undefined) styledDiff = opts.renderDiff?.(dry.diff.before, dry.diff.after);
+  if (dry.diff !== undefined) {
+    styledDiff = opts.renderDiff?.(dry.diff.before, dry.diff.after, dry.diff.path);
+  }
 
   // OUTSIDE the project root and not granted this session: a dedicated
   // permission ask showing the absolute path. EVERY approved answer grants
@@ -463,7 +562,74 @@ async function executeToolCall(
     return await runApproved(tool, input, label, reply, toolEvents, cb, opts, dirs);
   }
 
+  // v1.3: the interactive file-change review replaces the generic gate for
+  // diff-carrying write tools (write_file/edit_file). neverAutoAllow tools
+  // (remove) keep the classic gate no matter what. The review NEVER writes —
+  // an apply decision is executed through hooks.apply (guarded, conflict-
+  // checked, atomic, checkpointed).
+  if (
+    opts.fileChange !== undefined &&
+    dry.diff !== undefined &&
+    tool.kind === 'write' &&
+    tool.neverAutoAllow !== true
+  ) {
+    const hooks = opts.fileChange;
+    const change = {
+      path: dry.diff.path ?? label,
+      before: dry.diff.before,
+      after: dry.diff.after,
+      kind:
+        dry.diff.kind ?? (dry.diff.before === '' ? ('created' as const) : ('modified' as const)),
+      label,
+    };
+    const decision = await hooks.review(change);
+    switch (decision.action) {
+      case 'apply':
+        return await applyReviewed(hooks, tool, label, change, undefined);
+      case 'apply-all':
+        // The hook auto-answers subsequent reviews itself; also record the
+        // classic session allow for this exact label.
+        allows.remember(tool.kind, tool.name, label);
+        cb.onActivity?.('· applying all remaining file changes without asking');
+        return await applyReviewed(hooks, tool, label, change, undefined);
+      case 'apply-hunks':
+        return await applyReviewed(hooks, tool, label, change, decision.accepted);
+      case 'reject':
+        return denied(tool, label, decision.reason, cb, reply, toolEvents);
+      case 'cancel':
+        return denied(tool, label, 'cancelled by user', cb, reply, toolEvents);
+    }
+  }
+
   return await promptLoop(tool, input, label, preview, styledDiff, allows.outsideDirs());
+
+  /** Execute an approved review decision through the guarded writer. */
+  async function applyReviewed(
+    hooks: FileChangeHooks,
+    tool: Tool,
+    label: string,
+    change: {
+      path: string;
+      before: string;
+      after: string;
+      kind: 'created' | 'modified' | 'deleted';
+      label: string;
+    },
+    acceptedHunks: readonly number[] | undefined,
+  ): Promise<CallOutcome> {
+    const applied = await hooks.apply(change, acceptedHunks);
+    cb.onActivity?.(applied.ok ? `· ${applied.summary}` : `✗ ${applied.summary}`);
+    cb.onToolResult?.({
+      name: tool.name,
+      label,
+      kind: tool.kind,
+      ok: applied.ok,
+      summary: applied.summary,
+    });
+    reply(applied.summary);
+    toolEvents.push({ name: tool.name, label, ok: applied.ok, summary: applied.summary });
+    return applied.ok ? 'succeeded' : 'failed';
+  }
 
   /** The normal y/n/a[/e] prompt cycle (v0.2 flow, plus dirs + rich callbacks). */
   async function promptLoop(
@@ -515,7 +681,7 @@ async function executeToolCall(
       preview = reDry.preview ?? reDry.summary;
       styledDiff =
         reDry.diff !== undefined
-          ? opts.renderDiff?.(reDry.diff.before, reDry.diff.after)
+          ? opts.renderDiff?.(reDry.diff.before, reDry.diff.after, reDry.diff.path)
           : undefined;
     }
   }
@@ -572,8 +738,18 @@ async function runApproved(
   cb.onActivity?.(result.ok ? `· ${result.summary}` : `✗ ${result.summary}`);
   const styledDiff =
     result.diff !== undefined
-      ? opts.renderDiff?.(result.diff.before, result.diff.after)
+      ? opts.renderDiff?.(result.diff.before, result.diff.after, result.diff.path)
       : undefined;
+  // v1.3: checkpoint successful file changes for /undo (the review-apply path
+  // checkpoints itself — this covers the classic gate).
+  if (result.ok && result.diff !== undefined && opts.onFileChange !== undefined) {
+    opts.onFileChange({
+      path: result.diff.path ?? freshLabel,
+      before: result.diff.before,
+      after: result.diff.after,
+      kind: result.diff.kind ?? (result.diff.before === '' ? 'created' : 'modified'),
+    });
+  }
   cb.onToolResult?.({
     name: tool.name,
     label: freshLabel,

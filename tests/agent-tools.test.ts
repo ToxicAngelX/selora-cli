@@ -327,10 +327,107 @@ describe('edit_file', () => {
         ctx(root, true),
       );
       expect(dry.ok).toBe(true);
-      expect(dry.diff).toEqual({ before: 'one\ntwo\nthree\n', after: 'one\nTWO\nthree\n' });
+      expect(dry.diff).toEqual({
+        before: 'one\ntwo\nthree\n',
+        after: 'one\nTWO\nthree\n',
+        path: 'u.ts',
+        kind: 'modified',
+      });
       const real = await editFileTool.run({ path: 'u.ts', find: 'two', replace: 'TWO' }, ctx(root));
       expect(real.diff?.after).toBe('one\nTWO\nthree\n');
       expect(readFileSync(join(root, 'u.ts'), 'utf8')).toBe('one\nTWO\nthree\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v1.3: ambiguous refusal lists the occurrence line numbers', async () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, 'amb.ts'), 'a\nx = 1;\nb\nx = 1;\nc\nx = 1;\n', 'utf8');
+      const res = await editFileTool.run(
+        { path: 'amb.ts', find: 'x = 1;', replace: 'x = 2;' },
+        ctx(root),
+      );
+      expect(res.ok).toBe(false);
+      expect(res.summary).toContain('matches 3 times in amb.ts');
+      expect(res.summary).toContain('lines 2, 4, 6');
+      expect(res.summary).toContain('replace_all');
+      expect(readFileSync(join(root, 'amb.ts'), 'utf8')).toContain('x = 1;');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v1.3: not-found refusal shows the closest-looking line with its number', async () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, 'c.ts'), 'const total = price * rate;\nreturn total;\n', 'utf8');
+      const res = await editFileTool.run(
+        { path: 'c.ts', find: 'const total = price*rate;', replace: 'x' },
+        ctx(root),
+      );
+      expect(res.ok).toBe(false);
+      expect(res.summary).toContain('find text not found in c.ts');
+      expect(res.summary).toContain('closest match at line 1: const total = price * rate;');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v1.3: replace_all changes EVERY occurrence (diff + summary count them)', async () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, 'r.ts'), 'x = 1;\ny\nx = 1;\n', 'utf8');
+      const dry = await editFileTool.run(
+        { path: 'r.ts', find: 'x = 1;', replace: 'x = 2;', replace_all: true },
+        ctx(root, true),
+      );
+      expect(dry.ok).toBe(true);
+      expect(dry.summary).toBe('would replace 2 occurrences in r.ts');
+      expect(dry.diff?.after).toBe('x = 2;\ny\nx = 2;\n');
+      // dry run changed nothing
+      expect(readFileSync(join(root, 'r.ts'), 'utf8')).toContain('x = 1;');
+
+      const res = await editFileTool.run(
+        { path: 'r.ts', find: 'x = 1;', replace: 'x = 2;', replace_all: true },
+        ctx(root),
+      );
+      expect(res.ok).toBe(true);
+      expect(res.summary).toContain('replaced 2 occurrences');
+      expect(readFileSync(join(root, 'r.ts'), 'utf8')).toBe('x = 2;\ny\nx = 2;\n');
+      // a non-boolean replace_all is refused
+      expect(
+        (
+          await editFileTool.run(
+            { path: 'r.ts', find: 'x', replace: 'y', replace_all: 1 },
+            ctx(root),
+          )
+        ).summary,
+      ).toContain('replace_all must be a boolean');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v1.3: write_file dry + real runs carry the diff (create and overwrite)', async () => {
+    const root = tempRoot();
+    try {
+      // create: diffs against ''
+      const created = await writeFileTool.run({ path: 'n.ts', content: 'a\nb\n' }, ctx(root, true));
+      expect(created.diff).toEqual({ before: '', after: 'a\nb\n', path: 'n.ts', kind: 'created' });
+      // overwrite: diffs against the old content
+      writeFileSync(join(root, 'o.ts'), 'old\n', 'utf8');
+      const over = await writeFileTool.run({ path: 'o.ts', content: 'new\n' }, ctx(root, true));
+      expect(over.diff).toEqual({
+        before: 'old\n',
+        after: 'new\n',
+        path: 'o.ts',
+        kind: 'modified',
+      });
+      const real = await writeFileTool.run({ path: 'o.ts', content: 'newer\n' }, ctx(root));
+      expect(real.diff?.kind).toBe('modified');
+      expect(real.diff?.after).toBe('newer\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

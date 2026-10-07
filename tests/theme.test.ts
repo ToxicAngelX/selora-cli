@@ -42,6 +42,19 @@ describe('color level detection', () => {
     expect(colorLevelFor(true, { TERM: 'xterm-kitty' })).toBe(3);
     expect(colorLevelFor(true, { TERM: 'xterm', WT_SESSION: 'some-guid' })).toBe(3);
   });
+
+  it('FORCE_COLOR forces color on non-TTY (CI logs); 0/false disable; 2/3 pin the level', () => {
+    expect(colorLevelFor(false, { FORCE_COLOR: '1' })).toBe(1);
+    expect(colorLevelFor(false, { FORCE_COLOR: '' })).toBe(1);
+    expect(colorLevelFor(false, { FORCE_COLOR: '2' })).toBe(2);
+    expect(colorLevelFor(false, { FORCE_COLOR: '3' })).toBe(3);
+    expect(colorLevelFor(false, { FORCE_COLOR: '0' })).toBe(0);
+    expect(colorLevelFor(true, { FORCE_COLOR: 'false' })).toBe(0);
+    // an explicit force beats NO_COLOR (the chalk convention)
+    expect(colorLevelFor(false, { FORCE_COLOR: '3', NO_COLOR: '1' })).toBe(3);
+    // absent FORCE_COLOR: NO_COLOR still rules
+    expect(colorLevelFor(true, { NO_COLOR: '1', FORCE_COLOR: undefined })).toBe(0);
+  });
 });
 
 describe('hex and fallback conversions', () => {

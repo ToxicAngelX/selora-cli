@@ -1,0 +1,22 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`split view > pairs del/add rows across a center divider with outer gutters 1`] = `
+"╭─ ✎ Modified  src/utils/format.ts ────────────────────────────────── +2 −1 ─╮
+│ @@ -10,3 +10,4 @@ export function formatPrice                              │
+│10     const rate = getRate();    │    const rate = getRate();            10│
+│11 −   const total = price * rate;│+   const total = round(price * rate); 11│
+│                                  │+   const label = fmt(total);          12│
+│12     return label;              │    return label;                      13│
+╰────────────────────────────────────────────────────────────────────────────╯"
+`;
+
+exports[`unified layout > renders the boxed modify layout: gutters, markers, stats, borders 1`] = `
+"╭─ ✎ Modified  src/utils/format.ts ───── +2 −1 ─╮
+│ @@ -10,3 +10,4 @@ export function formatPrice │
+│ 10 10 │     const rate = getRate();           │
+│ 11    │ −   const total = price * rate;       │
+│    11 │ +   const total = round(price * rate);│
+│    12 │ +   const label = fmt(total);         │
+│ 12 13 │     return label;                     │
+╰───────────────────────────────────────────────╯"
+`;

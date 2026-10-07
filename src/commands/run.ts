@@ -27,6 +27,7 @@
  * 'glm-5.3-flash'. Turn cap: --max-turns > selora.json agent.maxTurns > 25.
  */
 
+import { isAbsolute, resolve } from 'node:path';
 import type { CliContext } from '../context.js';
 import { loadConfig, resolveSettings } from '../config/index.js';
 import { loadProjectConfig } from '../config/project.js';
@@ -56,8 +57,10 @@ import {
 } from '../agent/permissions.js';
 import type { Tool } from '../agent/tool.js';
 import { themeFor } from '../ui/theme.js';
-import { renderUnifiedDiff } from '../ui/diff.js';
-import { diffStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { resolveDiffConfig } from '../config/diff.js';
+import { computeFileDiff, DiffHistory, renderFileDiff } from '../diff/index.js';
+import type { FileChange, RenderOptions } from '../diff/types.js';
 import {
   loadSession,
   newSession,
@@ -78,6 +81,12 @@ export interface RunFlags {
   safe?: boolean;
   /** Turn cap override (1-200; default: selora.json agent.maxTurns or 25). */
   maxTurns?: number | undefined;
+  /** v1.3: permissions.mode dry-run — proposed changes print, nothing writes. */
+  dryRun?: boolean;
+  /** v1.3: diff layout override — 'unified' | 'split' | 'auto'. */
+  diffView?: string | undefined;
+  /** v1.3: diff palette override — 'classic' | 'colorblind' | 'mono'. */
+  diffPalette?: string | undefined;
 }
 
 /**
@@ -242,6 +251,63 @@ export async function runRun(
   const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
   const richDisplay = ctx.io.isTTY && !ctx.json;
 
+  // v1.3: the diff system — config + flags (flags win), the boxed renderer for
+  // every diff the loop surfaces, dry-run mode, and on-disk checkpoints so a
+  // later `selora chat` session can /undo what a run changed.
+  if (
+    flags.diffView !== undefined &&
+    flags.diffView !== 'unified' &&
+    flags.diffView !== 'split' &&
+    flags.diffView !== 'auto'
+  ) {
+    process.exitCode = 1;
+    r.fail(`invalid --diff-view "${flags.diffView}" — expected unified, split, or auto`);
+    return;
+  }
+  if (
+    flags.diffPalette !== undefined &&
+    flags.diffPalette !== 'classic' &&
+    flags.diffPalette !== 'colorblind' &&
+    flags.diffPalette !== 'mono'
+  ) {
+    process.exitCode = 1;
+    r.fail(`invalid --diff-palette "${flags.diffPalette}" — expected classic, colorblind, or mono`);
+    return;
+  }
+  const diffConfig = resolveDiffConfig(loadConfig(), {
+    diffView: flags.diffView,
+    diffPalette: flags.diffPalette,
+    dryRun: flags.dryRun === true,
+  });
+  const diffHistory = new DiffHistory({
+    root: cwd,
+    maxBytes: diffConfig.historyMaxSizeMB * 1024 * 1024,
+  });
+  const runDiffRenderOpts = (): RenderOptions => ({
+    view: diffConfig.view,
+    width: process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80,
+    maxLines: diffConfig.maxLines,
+    palette: diffConfig.palette,
+    syntaxHighlight: diffConfig.syntaxHighlight,
+    wordDiff: diffConfig.wordDiff,
+    showWhitespace: diffConfig.showWhitespace,
+    expandGenerated: !diffConfig.collapseGenerated,
+  });
+  const renderDiff = (before: string, after: string, path?: string): readonly string[] => {
+    const p = path ?? 'file';
+    const change: FileChange =
+      before === '' && after !== ''
+        ? { kind: 'created', path: p, newText: after }
+        : after === '' && before !== ''
+          ? { kind: 'deleted', path: p, oldText: before }
+          : { kind: 'modified', path: p, oldText: before, newText: after };
+    return renderFileDiff(
+      computeFileDiff(change, { context: diffConfig.context }),
+      theme,
+      runDiffRenderOpts(),
+    );
+  };
+
   // The permission gate. JSON mode cannot prompt: --yes auto-approves,
   // otherwise every tool is denied (the denial text says how to change that).
   const permissions: PermissionAsker = ctx.json
@@ -273,8 +339,7 @@ export async function runRun(
         model: () => model,
         permissions,
         allows,
-        renderDiff: (before, after) =>
-          renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 }),
+        renderDiff,
         onSubEvent: (line) => {
           if (!ctx.json) r.writeRawGray(`${line}\n`);
         },
@@ -310,8 +375,18 @@ export async function runRun(
       autoApprove: flags.yes === true,
       allows,
       signal: interrupt.signal,
-      renderDiff: (before, after) =>
-        renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 }),
+      renderDiff,
+      dryRun: diffConfig.reviewMode === 'dry-run',
+      onFileChange: (rec) => {
+        diffHistory.record({
+          absPath: isAbsolute(rec.path) ? rec.path : resolve(cwd, rec.path),
+          displayPath: rec.path,
+          changeKind: rec.kind,
+          beforeText: rec.kind === 'created' ? undefined : rec.before,
+          afterText: rec.after,
+          mode: undefined,
+        });
+      },
       callbacks: {
         onDelta: (text) => {
           content += text;

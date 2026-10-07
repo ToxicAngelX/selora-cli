@@ -189,11 +189,17 @@ export function buildProgram(io: CliIo): Command {
     .option('--model <id>', 'model for this session (default: the configured default model)')
     .option('--safe', 'restrict the agent to read-only tools')
     .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
+    .option('--dry-run', 'show proposed file changes as diffs without writing anything')
+    .option('--diff-view <view>', 'diff layout: unified, split, or auto')
+    .option('--diff-palette <name>', 'diff palette: classic, colorblind, or mono')
     .action(async (opts: Record<string, unknown>) => {
       await runChat(ctxFor(chatCmd), {
         model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
         safe: opts['safe'] === true,
         yes: opts['yes'] === true,
+        dryRun: opts['dryRun'] === true,
+        diffView: typeof opts['diffView'] === 'string' ? opts['diffView'] : undefined,
+        diffPalette: typeof opts['diffPalette'] === 'string' ? opts['diffPalette'] : undefined,
       });
     });
 
@@ -251,6 +257,9 @@ export function buildProgram(io: CliIo): Command {
     .option('--safe', 'restrict the agent to read-only tools')
     .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
     .option('--max-turns <n>', 'agent turn cap (default: 25; selora.json agent.maxTurns)')
+    .option('--dry-run', 'show proposed file changes as diffs without writing anything')
+    .option('--diff-view <view>', 'diff layout: unified, split, or auto')
+    .option('--diff-palette <name>', 'diff palette: classic, colorblind, or mono')
     .action(async (promptParts: unknown, opts: Record<string, unknown>) => {
       const maxTurnsRaw = opts['maxTurns'];
       let maxTurns: number | undefined;
@@ -267,6 +276,9 @@ export function buildProgram(io: CliIo): Command {
         yes: opts['yes'] === true,
         safe: opts['safe'] === true,
         maxTurns,
+        dryRun: opts['dryRun'] === true,
+        diffView: typeof opts['diffView'] === 'string' ? opts['diffView'] : undefined,
+        diffPalette: typeof opts['diffPalette'] === 'string' ? opts['diffPalette'] : undefined,
       });
     });
 
@@ -279,11 +291,17 @@ export function buildProgram(io: CliIo): Command {
     .option('--model <id>', "model for this session (default: the session's model)")
     .option('--safe', 'restrict the agent to read-only tools')
     .option('--yes', 'auto-approve tool execution non-interactively (still respects --safe)')
+    .option('--dry-run', 'show proposed file changes as diffs without writing anything')
+    .option('--diff-view <view>', 'diff layout: unified, split, or auto')
+    .option('--diff-palette <name>', 'diff palette: classic, colorblind, or mono')
     .action(async (name: unknown, opts: Record<string, unknown>) => {
       await runResume(ctxFor(resumeCmd), typeof name === 'string' ? name : undefined, {
         model: typeof opts['model'] === 'string' ? opts['model'] : undefined,
         safe: opts['safe'] === true,
         yes: opts['yes'] === true,
+        dryRun: opts['dryRun'] === true,
+        diffView: typeof opts['diffView'] === 'string' ? opts['diffView'] : undefined,
+        diffPalette: typeof opts['diffPalette'] === 'string' ? opts['diffPalette'] : undefined,
       });
     });
 

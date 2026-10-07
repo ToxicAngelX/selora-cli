@@ -119,8 +119,8 @@ The key is validated against the API **before** anything is stored.
 | `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, aurora, mono)                       | [theme.md](docs/commands/theme.md)           |
 | `selora trust [add\|remove] [<dir>]`  | manage trusted workspaces for the chat trust screen                           | [trust.md](docs/commands/trust.md)           |
 | `selora completion [bash\|zsh\|fish]` | print a shell completion script                                               | [completion.md](docs/commands/completion.md) |
-| `selora update`                       | check npm for a newer selora and install it (`--check` to report only)      | [update.md](docs/commands/update.md)         |
-| `selora chat` — ctx meter               | live context bar (`ctx ▰▰▱▱ 62% · 18k/30k`) + auto-compaction at 90%         | [context.md](docs/agent/context.md)          |
+| `selora update`                       | check npm for a newer selora and install it (`--check` to report only)        | [update.md](docs/commands/update.md)         |
+| `selora chat` — ctx meter             | live context bar (`ctx ▰▰▱▱ 62% · 18k/30k`) + auto-compaction at 90%          | [context.md](docs/agent/context.md)          |
 
 Global flags on every command: `--json` (machine-readable output only),
 `--debug` (request/response details, always redacted), `--api-url <url>`
@@ -209,12 +209,12 @@ Enter to confirm · Esc to cancel
 
 `selora chat` permission modes, cycled with **shift+tab** at the prompt:
 
-| Mode          | Reads & search | File edits   | Shell commands | Deletions | Outside the project |
-| ------------- | -------------- | ------------ | -------------- | --------- | ------------------- |
-| `manual`      | ask            | ask          | ask            | ask       | ask                 |
-| `acceptEdits` | run            | run          | ask            | ask       | ask                 |
-| `auto`        | run            | run          | run            | **ask**   | run (grants the dir) |
-| `plan`        | run            | **proposed** | **proposed**   | **proposed** | ask              |
+| Mode          | Reads & search | File edits   | Shell commands | Deletions    | Outside the project  |
+| ------------- | -------------- | ------------ | -------------- | ------------ | -------------------- |
+| `manual`      | ask            | ask          | ask            | ask          | ask                  |
+| `acceptEdits` | run            | run          | ask            | ask          | ask                  |
+| `auto`        | run            | run          | run            | **ask**      | run (grants the dir) |
+| `plan`        | run            | **proposed** | **proposed**   | **proposed** | ask                  |
 
 `plan` executes nothing that mutates: the tool call is recorded as a
 numbered proposal (`/plan` shows the list, `/plan clear` empties it) and the
@@ -237,6 +237,73 @@ Also at the prompt:
   exit code, and **nothing is sent to the model**. No permission gate — you
   typed it, same trust as your own terminal. Mid-turn a `!` line is refused
   (never queued); `\!` escapes a literal leading `!`.
+
+## Diff & review
+
+Every file change the agent proposes renders as a boxed, syntax-highlighted
+diff before it lands — unified or side-by-side, with word-level highlights on
+the exact tokens that changed and honest fallbacks for binary and generated
+files. Nothing is written until you say so, writes are atomic (tmp + rename,
+with conflict detection when the file changed since it was read), and every
+applied change is checkpointed for undo:
+
+```
+╭─ ✎ Modified  src/utils/format.ts ─────────────────────── +3 −3 ─╮
+│ @@ -2,10 +2,10 @@ import { getExchangeRate } from './rates.js'; │
+│  2  2 │   import { round } from './math.js';                    │
+│  3  3 │                                                         │
+│  4  4 │   // Format a price for display in the storefront.      │
+│  5    │ − export function formatPrice(price, currency) {        │
+│     5 │ + export function formatPrice(price, currency = 'USD') {│
+│  6  6 │     const rate = getExchangeRate(currency);             │
+│  7    │ −   const total = price * rate;                         │
+│  8    │ −   return total.toFixed(2);                            │
+│     7 │ +   const total = round(price * rate);                  │
+│     8 │ +   return `${total.toFixed(2)} ${currency}`;           │
+│  9  9 │   }                                                     │
+│ 10 10 │                                                         │
+│ 11 11 │   export function formatDate(d) {                       │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+The review prompt is single-key: **`y`** apply · **`n`** reject (optionally
+with a reason fed back to the model) · **`a`** apply this and all remaining
+files · **`h`** review hunk-by-hunk and apply only the ones you pick ·
+**`e`** expand a capped or collapsed diff · **`s`** toggle unified/split ·
+**`q`** (or Esc/Ctrl+C) cancel the whole review.
+
+Slash commands in chat: **`/undo`** reverts the last applied change,
+**`/redo`** re-applies it, **`/diff`** re-shows the last applied diff
+(**`/diff all`** the whole session, **`/diff export`** writes a
+`git apply`-able `.selora/session-changes.patch`). Undo survives restarts —
+checkpoints live on disk in `.selora/history/` (add `.selora` to your
+`.gitignore` if you don't want them tracked).
+
+Flags on `chat`, `run`, and `resume`: **`--dry-run`** prints the proposed
+diffs and writes nothing, **`--diff-view unified|split|auto`** picks the
+layout, **`--diff-palette classic|colorblind|mono`** picks the palette.
+See the whole system end to end with `npm run demo:diff`.
+
+Config (in the global `config.json`, validated at load — bad values warn and
+fall back to the default):
+
+| Key                      | Values                                         | Default   |
+| ------------------------ | ---------------------------------------------- | --------- |
+| `diff.view`              | `unified` · `split` · `auto` (split ≥140 cols) | `auto`    |
+| `diff.context`           | context lines around each change (0–20)        | `3`       |
+| `diff.maxLines`          | rendered rows per file before an expand cap    | `300`     |
+| `diff.palette`           | `classic` · `colorblind` · `mono`              | `classic` |
+| `diff.syntaxHighlight`   | highlight line text by file extension          | `true`    |
+| `diff.wordDiff`          | brighter highlight on changed tokens           | `true`    |
+| `diff.showWhitespace`    | show tabs as `→`, trailing spaces as `·`       | `false`   |
+| `diff.collapseGenerated` | fold lockfile/generated diffs to one row       | `true`    |
+| `diff.secretScan`        | ⚠-warn on secret-looking added lines           | `true`    |
+| `permissions.mode`       | `ask` · `auto` · `dry-run`                     | `ask`     |
+| `history.maxSizeMB`      | disk cap for the checkpoints (1–1024)          | `50`      |
+
+Binary changes show a size summary (`Binary file changed (26 B → 34 B)`)
+instead of fake text hunks; secret-looking strings on added lines print a ⚠
+warning before you apply.
 
 ## Subagents (v1.0)
 

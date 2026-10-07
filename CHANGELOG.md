@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.3.0 — the diff system
+
+- **A real diff subsystem** (`src/diff/`) — a pure engine (hunks, word-level
+  segments, rename pairing, EOL handling, binary and generated-file
+  detection, unified-patch export), a boxed ANSI renderer (unified and
+  side-by-side split views), an interactive review gate, a safety layer, and
+  checkpoint history. Every file change the agent proposes now renders as a
+  syntax-highlighted diff before it lands.
+- **Interactive review** — single-key gate in front of every write: `y`
+  apply, `n` reject (with an optional reason fed back to the model), `a`
+  apply all remaining files, `h` review hunk-by-hunk and apply only the picks,
+  `e` expand a capped or collapsed diff, `s` toggle unified/split, `q` (or
+  Esc/Ctrl+C) cancel the whole review.
+- **`/undo`, `/redo`, `/diff`** — applied changes checkpoint to
+  `.selora/history/` (undo survives restarts), `/diff` re-shows the last
+  applied diff, `/diff all` the whole session, and `/diff export` writes a
+  `git apply`-able `.selora/session-changes.patch`.
+- **`--dry-run`, `--diff-view`, `--diff-palette`** on `chat`, `run`, and
+  `resume` — print proposed diffs without writing, pick unified/split/auto
+  layout, pick the `classic`/`colorblind`/`mono` palette.
+- **Config sections** — `diff.*` (view, context, maxLines, palette,
+  syntaxHighlight, wordDiff, showWhitespace, collapseGenerated, secretScan),
+  `permissions.mode` (`ask`/`auto`/`dry-run`), and `history.maxSizeMB` in
+  config.json, validated at load with warn-and-ignore fallbacks.
+- **`edit_file` gains `replace_all`** — change every occurrence deliberately;
+  refusals are precise (a not-found shows the closest line, an ambiguous
+  match reports the occurrence count).
+- **`write_file` carries diff payloads** — creates diff against `''`,
+  overwrites against the old content, so the permission prompt and the
+  transcript show the real change for both.
+- **Split view, palettes, word-level highlights** — side-by-side layout with
+  zipped del/add pairs (auto above 140 columns), three palettes (classic,
+  colorblind, mono — dark/light scheme auto-detected), and brighter
+  backgrounds on the exact changed tokens of paired lines.
+- **Binary and generated files handled honestly** — binary changes render a
+  size summary instead of fake text hunks; lockfiles and generated files
+  collapse to one row (`e` expands).
+- **Secret scan** — secret-looking strings on added lines print a ⚠ warning
+  before you apply.
+- **Atomic writes + conflict detection** — writes go tmp + rename, and a file
+  that changed since it was read is a conflict, never a silent clobber.
+- **Demo** — `npm run demo:diff` renders the whole system end to end from the
+  built bundle.
+- **Build** — tsup now minifies and the diff API ships as a separate
+  `dist/diff/index.js` entry, keeping the npm tarball at ~143 KB under the
+  150 KB budget.
+
 ## 1.2.1 — terminal line discipline (the garbled-render fixes)
 
 - **Spinner/reply glue fixed** — thinking models interleave reasoning deltas
@@ -75,7 +122,7 @@ landed from the pty harness findings. No new runtime dependencies.
 - after trusting, the REPL was dead: the prompt router now resumes stdin on
   attach
 - chat now wires the loop's `onActivity` lines (`· outside access granted
-  for this session: …`) which printed nowhere in the REPL
+for this session: …`) which printed nowhere in the REPL
 - terminal width 0 (harness/CI ptys) falls back to 80 columns everywhere
 
 ## [0.9.0] - 2026-10-07
@@ -105,7 +152,7 @@ a stability pass. No new runtime dependencies (still exactly `commander` +
   leading bang. Ctrl+C mid-`!` kills the command (SIGINT, then SIGKILL if it
   lingers) instead of exiting the session.
 - **Plan mode** — the 4th shift+tab mode (`manual → acceptEdits → auto →
-  plan`, status line `◈ plan mode on · ? for shortcuts`). Read/search tools
+plan`, status line `◈ plan mode on · ? for shortcuts`). Read/search tools
   run normally; every mutating tool call is NOT executed — the loop denies it
   ("plan mode: proposal recorded — switch modes (shift+tab) to execute" goes
   back to the model) and records the tool's label as a proposal. `/plan`
@@ -120,7 +167,7 @@ a stability pass. No new runtime dependencies (still exactly `commander` +
   regression; manual/acceptEdits/auto semantics are unchanged.
 - **The mid-turn input queue is capped at ONE** (was: unbounded). The first
   line typed while a turn streams queues with `· queued — runs when this turn
-  finishes`; a second prints `· one prompt already queued — it runs next`,
+finishes`; a second prints `· one prompt already queued — it runs next`,
   echoes the discarded line dimly, and drops it — never queued, never sent.
   Ctrl+C aborting a turn also clears the queued line.
 

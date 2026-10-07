@@ -72,7 +72,12 @@ export function renderToolResult(info: ToolResultDisplay, theme: Theme): string[
     }
   }
   if (info.diff !== undefined && info.diff.length > 0) {
-    for (const line of info.diff) out.push(`      ${line}`);
+    // v1.3: the boxed diff renderer produces full-width rows (╭ │ ╰) that
+    // must NOT be indented (padding to the terminal width would overflow);
+    // legacy pre-rendered rows keep the 6-space indent.
+    const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+    const boxed = info.diff[0]!.replace(ANSI_RE, '').startsWith('╭');
+    for (const line of info.diff) out.push(boxed ? line : `      ${line}`);
   }
   return out;
 }

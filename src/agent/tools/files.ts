@@ -13,6 +13,18 @@
  * the model, never a crash. edit_file (v0.3) requires the find string to
  * match UNIQUELY — an ambiguous edit is refused with the occurrence count —
  * and both its dry run and its result carry before/after for a colored diff.
+ *
+ * v1.3 (diff system):
+ *  - edit_file gains `replace_all` (change every occurrence — the uniqueness
+ *    rule is lifted deliberately) and its refusals got precise: not-found
+ *    shows the closest-looking line with its number; ambiguous lists the
+ *    occurrence line numbers.
+ *  - every diff payload carries `path` and `kind` ('created' | 'modified' |
+ *    'deleted') so the diff renderer can title/highlight correctly and the
+ *    session history can checkpoint honestly.
+ *  - write_file dry runs (and real runs) now carry the diff too: creates
+ *    diff against '' and overwrites against the old content (read back only
+ *    when the existing file is within the tool size cap).
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -233,12 +245,34 @@ export const writeFileTool: Tool = {
     const p = resolveForTool(ctx, r['path']);
     if (p.kind === 'error') return badShape(`write_file: ${p.error}`);
     if (p.kind === 'outside') return outsideResults('write_file', p.display, p.abs, ctx.dryRun);
-    const existed = statPath(p.abs) !== null;
+    const existing = statPath(p.abs);
+    const existed = existing !== null;
+    // The diff payload (v1.3): creates diff against '', overwrites against the
+    // old content — read back only within the tool size cap (a bigger existing
+    // file still gets the plain preview; never blow memory for a display).
+    let before: string | undefined;
+    if (existed && existing.size <= MAX_TOOL_FILE_BYTES) {
+      try {
+        before = readFileSync(p.abs, 'utf8');
+      } catch {
+        before = undefined; // unreadable — the write itself will surface the error
+      }
+    }
+    const diff =
+      before !== undefined || !existed
+        ? {
+            before: before ?? '',
+            after: content,
+            path: p.display,
+            kind: existed ? ('modified' as const) : ('created' as const),
+          }
+        : undefined;
     if (ctx.dryRun) {
       return {
         ok: true,
         summary: `would ${existed ? 'overwrite' : 'write'} ${p.display} (${formatBytes(content.length)})`,
         preview: `${existed ? 'overwrite' : 'write'} ${p.display} — full content:\n${capPreview(content)}`,
+        ...(diff !== undefined ? { diff } : {}),
       };
     }
     try {
@@ -250,6 +284,7 @@ export const writeFileTool: Tool = {
     return {
       ok: true,
       summary: `${existed ? 'overwrote' : 'wrote'} ${p.display} (${formatBytes(content.length)})`,
+      ...(diff !== undefined ? { diff } : {}),
     };
   },
 };
@@ -259,10 +294,12 @@ export const editFileTool: Tool = {
   description:
     'Edit a file by replacing a find string with a replacement. The find ' +
     'string must match EXACTLY ONCE in the file — an ambiguous match is ' +
-    'refused with the occurrence count (include more surrounding lines to ' +
-    'make it unique). The permission prompt shows the change as a diff with ' +
-    'context. Paths may use ~, env vars, or the desktop/downloads/documents ' +
-    'aliases; paths outside the project root need user approval.',
+    'refused with the occurrence line numbers (include more surrounding lines ' +
+    'to make it unique), and a not-found refusal shows the closest-looking ' +
+    'line. Pass replace_all: true to change EVERY occurrence deliberately. ' +
+    'The permission prompt shows the change as a diff with context. Paths ' +
+    'may use ~, env vars, or the desktop/downloads/documents aliases; paths ' +
+    'outside the project root need user approval.',
   kind: 'write',
   parameters: {
     type: 'object',
@@ -273,6 +310,10 @@ export const editFileTool: Tool = {
       },
       find: { type: 'string', description: 'The exact text to find (must be unique in the file)' },
       replace: { type: 'string', description: 'The replacement text' },
+      replace_all: {
+        type: 'boolean',
+        description: 'Replace EVERY occurrence of find (default false — find must be unique)',
+      },
     },
     required: ['path', 'find', 'replace'],
   },
@@ -297,6 +338,13 @@ export const editFileTool: Tool = {
     const find = r['find'] as string;
     if (find === '') return badShape('edit_file: find must not be empty');
     const replace = r['replace'] as string;
+    let replaceAll = false;
+    if (Object.hasOwn(r, 'replace_all')) {
+      if (typeof r['replace_all'] !== 'boolean') {
+        return badShape('edit_file: replace_all must be a boolean');
+      }
+      replaceAll = r['replace_all'];
+    }
     const p = resolveForTool(ctx, r['path']);
     if (p.kind === 'error') return badShape(`edit_file: ${p.error}`);
     if (p.kind === 'outside') return outsideResults('edit_file', p.display, p.abs, ctx.dryRun);
@@ -318,30 +366,35 @@ export const editFileTool: Tool = {
     } catch (err) {
       return badShape(`edit_file: cannot read ${p.display}: ${errText(err)}`);
     }
-    // Unique-match contract: count occurrences across the whole file.
-    let occurrences = 0;
+    // Occurrence contract (v1.3): exactly-once, or every-occurrence with
+    // replace_all. Refusals are precise — a not-found shows the closest line,
+    // an ambiguous match lists the occurrence line numbers.
+    const occurrences: number[] = [];
     for (let at = text.indexOf(find); at >= 0; at = text.indexOf(find, at + find.length)) {
-      occurrences += 1;
+      occurrences.push(at);
     }
-    if (occurrences === 0) {
-      const lineCount = text.split('\n').length;
+    if (occurrences.length === 0) {
       return badShape(
-        `edit_file: find text not found in ${p.display} (file has ${lineCount} lines)`,
+        `edit_file: find text not found in ${p.display} (file has ${text.split('\n').length} lines)${closestLineHint(text, find)}`,
       );
     }
-    if (occurrences > 1) {
+    if (occurrences.length > 1 && !replaceAll) {
+      const lines = occurrences.map((at) => lineNumberAt(text, at));
+      const shown = lines.slice(0, 5).join(', ');
+      const more = lines.length > 5 ? `, …` : '';
       return badShape(
-        `edit_file: find text matches ${occurrences} times in ${p.display} — include more context so it matches exactly once`,
+        `edit_file: find text matches ${occurrences.length} times in ${p.display} (lines ${shown}${more}) — include more context so it matches exactly once, or pass replace_all: true to change all of them`,
       );
     }
-    const at = text.indexOf(find);
-    const next = text.slice(0, at) + replace + text.slice(at + find.length);
+    const next = replaceAll
+      ? text.split(find).join(replace)
+      : replaceOnce(text, occurrences[0]!, find, replace);
     if (ctx.dryRun) {
       return {
         ok: true,
-        summary: `would replace 1 occurrence in ${p.display}`,
-        preview: editPreview(text, at, find, replace),
-        diff: { before: text, after: next },
+        summary: `would replace ${occurrences.length} occurrence${occurrences.length === 1 ? '' : 's'} in ${p.display}`,
+        preview: editPreview(text, occurrences[0]!, find, replace),
+        diff: { before: text, after: next, path: p.display, kind: 'modified' },
       };
     }
     try {
@@ -351,11 +404,54 @@ export const editFileTool: Tool = {
     }
     return {
       ok: true,
-      summary: `edited ${p.display}: replaced 1 occurrence (${find.length} → ${replace.length} chars)`,
-      diff: { before: text, after: next },
+      summary: `edited ${p.display}: replaced ${occurrences.length} occurrence${occurrences.length === 1 ? '' : 's'} (${find.length} → ${replace.length} chars)`,
+      diff: { before: text, after: next, path: p.display, kind: 'modified' },
     };
   },
 };
+
+function replaceOnce(text: string, at: number, find: string, replace: string): string {
+  return text.slice(0, at) + replace + text.slice(at + find.length);
+}
+
+/** 1-based line number containing byte-offset `at` (JS string offset). */
+function lineNumberAt(text: string, at: number): number {
+  let line = 1;
+  for (let i = 0; i < at; i += 1) {
+    if (text[i] === '\n') line += 1;
+  }
+  return line;
+}
+
+/**
+ * The not-found hint: score every file line by how many of the find's first
+ * non-empty line's whitespace-separated tokens it contains, and report the
+ * best line (number + content, trimmed, ≤80 chars) when at least half its
+ * tokens (min 2) match — the model sees the near miss instead of guessing.
+ */
+function closestLineHint(text: string, find: string): string {
+  const needle = find.split('\n').find((l) => l.trim() !== '');
+  if (needle === undefined) return '';
+  const tokens = needle.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return '';
+  const threshold = Math.max(2, Math.ceil(tokens.length / 2));
+  let bestLine = -1;
+  let bestScore = 0;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    let score = 0;
+    for (const tok of tokens) {
+      if (lines[i]!.includes(tok)) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestLine = i;
+    }
+  }
+  if (bestLine === -1 || bestScore < threshold) return '';
+  const shown = lines[bestLine]!.trim();
+  return ` — closest match at line ${bestLine + 1}: ${shown.length > 80 ? `${shown.slice(0, 79)}…` : shown}`;
+}
 
 /** find/replace with 2 lines of context on each side, for the prompt preview. */
 function editPreview(text: string, at: number, find: string, replace: string): string {

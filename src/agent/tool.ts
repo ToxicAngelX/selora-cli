@@ -53,8 +53,17 @@ export interface ToolResult {
    * v0.3: the before/after of an edit, for a COLORED diff in the permission
    * prompt and the tool-result display. Dry runs of edit tools set this
    * (simulating the change); real runs may set it too.
+   * v1.3: `path` (the tool's display path) rides along so the diff renderer
+   * can title the box and pick syntax highlighting by extension; `kind`
+   * ('created' | 'modified' | 'deleted') lets session history checkpoint the
+   * change honestly (a create's undo deletes the file).
    */
-  diff?: { before: string; after: string };
+  diff?: {
+    before: string;
+    after: string;
+    path?: string | undefined;
+    kind?: 'created' | 'modified' | 'deleted' | undefined;
+  };
   /**
    * v0.3 (dry runs only): the tool resolved a path OUTSIDE the project root
    * and outside every session-allowed directory. The loop turns this into the

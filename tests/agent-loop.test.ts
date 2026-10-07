@@ -36,6 +36,11 @@ import {
 import { capturedIo, cleanup, freshEnv, useApiUrl, type TempEnv } from './helpers/env.js';
 import { saveConfig } from '../src/config/index.js';
 import { runRun } from '../src/commands/run.js';
+import { runAgentLoop } from '../src/agent/loop.js';
+import { builtinTools } from '../src/agent/tools/index.js';
+import { SeloraClient } from '../src/api/client.js';
+import type { PermissionAsker } from '../src/agent/permissions.js';
+import type { ReviewDecision } from '../src/diff/types.js';
 import type { CliContext, CliIo } from '../src/context.js';
 
 const NOT_FOUND = '{"error":{"code":"not_found","message":"no fixture"}}';
@@ -661,6 +666,222 @@ describe('agent loop — sessions', () => {
       await runRun(ctx(io2), 'hi again', { cwd: dir, session: 'm' });
       const body2 = JSON.parse(server.requests.slice(before2).at(-1)!.body) as { model: string };
       expect(body2.model).toBe('glm-5.3');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.3: dry-run mode, the file-change review hooks, and the checkpoint callback
+// ---------------------------------------------------------------------------
+
+/** An asker that records every request — the hook paths must never ask. */
+function recordingAsker(): PermissionAsker & { asked: string[] } {
+  const asked: string[] = [];
+  return {
+    asked,
+    ask: async (req) => {
+      asked.push(req.label);
+      return 'deny';
+    },
+    replacement: async () => null,
+  };
+}
+
+function loopClient(): SeloraClient {
+  return new SeloraClient({ baseUrl: server.url, apiKey: FAKE_KEY_USER });
+}
+
+describe('v1.3 loop hooks', () => {
+  it('dryRun: a write tool shows its diff, writes NOTHING, tells the model plainly', async () => {
+    routeToolRounds(1, WRITE_ROUND);
+    const dir = tempProject();
+    try {
+      const tools = builtinTools();
+      const result = await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'write the file' }],
+        tools,
+        maxTurns: 5,
+        cwd: dir,
+        permissions: recordingAsker(),
+        autoApprove: false,
+        dryRun: true,
+        callbacks: {
+          onDelta: () => {},
+          onTurnComplete: () => {},
+        },
+      });
+      expect(existsSync(join(dir, 'out.txt'))).toBe(false);
+      const ev = result.toolEvents.find((e) => e.name === 'write_file');
+      expect(ev?.ok).toBe(true);
+      expect(ev?.summary).toContain('[dry-run]');
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg?.content).toContain('DRY-RUN MODE');
+      expect(toolMsg?.content).toContain('NOTHING was written');
+      expect(result.stop).toBe('completed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('dryRun: read tools still run normally (reads are harmless)', async () => {
+    const READ_ROUND: string[] = [
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_R1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"a.txt\\"}"}}]},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    routeToolRounds(1, READ_ROUND);
+    const dir = tempProject();
+    try {
+      writeFileSync(join(dir, 'a.txt'), 'real content', 'utf8');
+      const result = await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'read it' }],
+        tools: builtinTools(),
+        maxTurns: 5,
+        cwd: dir,
+        // reads still pass the normal gate in dry-run mode — allow them
+        permissions: { ask: async () => 'allow', replacement: async () => null },
+        autoApprove: false,
+        dryRun: true,
+        callbacks: { onDelta: () => {}, onTurnComplete: () => {} },
+      });
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg?.content).toContain('real content');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fileChange hooks: review+apply REPLACE the gate for diff write tools', async () => {
+    routeToolRounds(1, WRITE_ROUND);
+    const dir = tempProject();
+    try {
+      const asker = recordingAsker();
+      const seen: string[] = [];
+      const result = await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'write the file' }],
+        tools: builtinTools(),
+        maxTurns: 5,
+        cwd: dir,
+        permissions: asker,
+        autoApprove: false,
+        fileChange: {
+          review: async (change) => {
+            seen.push(`${change.kind}:${change.path}`);
+            return { action: 'apply' } satisfies ReviewDecision;
+          },
+          apply: async (change) => {
+            writeFileSync(join(dir, change.path), change.after, 'utf8');
+            return { ok: true, summary: `applied ${change.path} via review` };
+          },
+        },
+        callbacks: { onDelta: () => {}, onTurnComplete: () => {} },
+      });
+      // the classic gate was never consulted for the write
+      expect(asker.asked).toEqual([]);
+      // the hook saw the change with its diff-derived kind and wrote the file
+      expect(seen).toEqual(['created:out.txt']);
+      expect(readFileSync(join(dir, 'out.txt'), 'utf8')).toBe('hi from the agent');
+      const ev = result.toolEvents.find((e) => e.name === 'write_file');
+      expect(ev?.summary).toBe('applied out.txt via review');
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg?.content).toBe('applied out.txt via review');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fileChange hooks: a reject decision writes nothing and carries the reason', async () => {
+    routeToolRounds(1, WRITE_ROUND);
+    const dir = tempProject();
+    try {
+      const result = await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'write the file' }],
+        tools: builtinTools(),
+        maxTurns: 5,
+        cwd: dir,
+        permissions: recordingAsker(),
+        autoApprove: false,
+        fileChange: {
+          review: async () =>
+            ({ action: 'reject', reason: 'wrong file' }) satisfies ReviewDecision as ReviewDecision,
+          apply: async () => ({ ok: true, summary: 'unreachable' }),
+        },
+        callbacks: { onDelta: () => {}, onTurnComplete: () => {} },
+      });
+      expect(existsSync(join(dir, 'out.txt'))).toBe(false);
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg?.content).toContain('Permission denied by user. Reason: wrong file');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fileChange hooks: apply-hunks forwards the accepted hunk indices', async () => {
+    routeToolRounds(1, WRITE_ROUND);
+    const dir = tempProject();
+    try {
+      let gotAccepted: readonly number[] | undefined | 'unset' = 'unset';
+      await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'write the file' }],
+        tools: builtinTools(),
+        maxTurns: 5,
+        cwd: dir,
+        permissions: recordingAsker(),
+        autoApprove: false,
+        fileChange: {
+          review: async () => ({ action: 'apply-hunks', accepted: [0] }) satisfies ReviewDecision,
+          apply: async (_change, acceptedHunks) => {
+            gotAccepted = acceptedHunks;
+            return { ok: true, summary: 'partial applied' };
+          },
+        },
+        callbacks: { onDelta: () => {}, onTurnComplete: () => {} },
+      });
+      expect(gotAccepted).toEqual([0]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('onFileChange: the classic gate path checkpoints successful diff writes', async () => {
+    routeToolRounds(1, WRITE_ROUND);
+    const dir = tempProject();
+    try {
+      const records: Array<{ path: string; kind: string }> = [];
+      const result = await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'write the file' }],
+        tools: builtinTools(),
+        maxTurns: 5,
+        cwd: dir,
+        permissions: {
+          ask: async () => 'allow',
+          replacement: async () => null,
+        },
+        autoApprove: false,
+        onFileChange: (rec) => {
+          records.push({ path: rec.path, kind: rec.kind });
+        },
+        callbacks: { onDelta: () => {}, onTurnComplete: () => {} },
+      });
+      expect(readFileSync(join(dir, 'out.txt'), 'utf8')).toBe('hi from the agent');
+      expect(records).toEqual([{ path: 'out.txt', kind: 'created' }]);
+      expect(result.toolEvents.find((e) => e.name === 'write_file')?.ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

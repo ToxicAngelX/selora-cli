@@ -59,3 +59,8 @@ if (isEntryPoint()) {
     console.error(error instanceof Error ? String(error.stack ?? error.message) : String(error));
   });
 }
+
+// NOTE: the diff subsystem's public API lives at src/diff/index.ts and is
+// built as a separate entry (dist/diff/index.js — used by `npm run
+// demo:diff`). It is deliberately NOT re-exported here: re-exporting it would
+// inflate the published index.d.ts from ~1 KB to ~45 KB.

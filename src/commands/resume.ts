@@ -28,6 +28,12 @@ export interface ResumeFlags {
   yes?: boolean;
   /** Project root (defaults to process.cwd()). */
   cwd?: string | undefined;
+  /** v1.3: show proposed changes without writing. */
+  dryRun?: boolean;
+  /** v1.3: diff layout override (unified|split|auto). */
+  diffView?: string | undefined;
+  /** v1.3: diff palette override (classic|colorblind|mono). */
+  diffPalette?: string | undefined;
 }
 
 const NAME_RULE =
@@ -85,5 +91,8 @@ export async function runResume(
     yes: flags.yes === true,
     cwd,
     resumeName: target,
+    dryRun: flags.dryRun === true,
+    diffView: flags.diffView,
+    diffPalette: flags.diffPalette,
   });
 }

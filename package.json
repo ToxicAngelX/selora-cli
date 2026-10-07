@@ -1,6 +1,6 @@
 {
   "name": "selora",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Open-source CLI for the Selora API gateway",
   "type": "module",
   "bin": {
@@ -12,6 +12,8 @@
   "files": [
     "dist/index.js",
     "dist/index.d.ts",
+    "dist/chunk-*.js",
+    "dist/diff/index.js",
     "docs",
     "examples",
     "README.md",
@@ -27,6 +29,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "predemo:diff": "npm run build",
+    "demo:diff": "node scripts/demo-diff.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build"
   },

@@ -101,6 +101,8 @@
 
 import * as readline from 'node:readline';
 import { PassThrough, Writable } from 'node:stream';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { CliContext } from '../context.js';
 import { loadConfig, resolveSettings, saveConfig } from '../config/index.js';
 import { loadProjectConfig } from '../config/project.js';
@@ -166,9 +168,30 @@ import {
 } from '../ui/logo.js';
 import { playFrames, trimEnd } from '../ui/animate.js';
 import { MarkdownStream } from '../ui/markdown.js';
-import { renderUnifiedDiff } from '../ui/diff.js';
 import { Spinner, SpinnerArbiter } from '../ui/spinner.js';
-import { diffStyleFor, markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { resolveDiffConfig } from '../config/diff.js';
+import {
+  applyHunks,
+  atomicWriteFile,
+  computeFileDiff,
+  DiffHistory,
+  guardPath,
+  readSnapshot,
+  renderChangeSetSummary,
+  renderFileDiff,
+  reviewChange,
+  scanSecrets,
+  toUnifiedPatch,
+} from '../diff/index.js';
+import type {
+  Checkpoint,
+  FileChange,
+  FileDiff,
+  RenderOptions,
+  SecretFinding,
+} from '../diff/types.js';
+import type { FileChangeHooks } from '../agent/loop.js';
 import {
   PromptRouter,
   pickFromList,
@@ -198,6 +221,12 @@ export interface ChatFlags {
    * same name.
    */
   resumeName?: string | undefined;
+  /** v1.3: permissions.mode dry-run — proposed changes print, nothing writes. */
+  dryRun?: boolean;
+  /** v1.3: diff layout override — 'unified' | 'split' | 'auto' (flags win over config). */
+  diffView?: string | undefined;
+  /** v1.3: diff palette override — 'classic' | 'colorblind' | 'mono'. */
+  diffPalette?: string | undefined;
 }
 
 /**
@@ -325,6 +354,42 @@ export async function runChat(
   let themeName: ThemeName =
     configuredTheme !== undefined && isThemeName(configuredTheme) ? configuredTheme : 'galaxy';
   let theme = themeFor(themeName, process.stdout.isTTY === true);
+
+  // ------------------------------------------------------------------
+  // v1.3 diff system: config (config.json diff/permissions/history) + flags
+  // (flags win). Invalid flag values are refused honestly, like --max-turns.
+  // The session history checkpoints every applied change (undo/redo live in
+  // <cwd>/.selora/history, size-capped by history.maxSizeMB).
+  // ------------------------------------------------------------------
+  if (
+    flags.diffView !== undefined &&
+    flags.diffView !== 'unified' &&
+    flags.diffView !== 'split' &&
+    flags.diffView !== 'auto'
+  ) {
+    process.exitCode = 1;
+    r.fail(`invalid --diff-view "${flags.diffView}" — expected unified, split, or auto`);
+    return;
+  }
+  if (
+    flags.diffPalette !== undefined &&
+    flags.diffPalette !== 'classic' &&
+    flags.diffPalette !== 'colorblind' &&
+    flags.diffPalette !== 'mono'
+  ) {
+    process.exitCode = 1;
+    r.fail(`invalid --diff-palette "${flags.diffPalette}" — expected classic, colorblind, or mono`);
+    return;
+  }
+  const diffConfig = resolveDiffConfig(loadConfig(), {
+    diffView: flags.diffView,
+    diffPalette: flags.diffPalette,
+    dryRun: flags.dryRun === true,
+  });
+  const diffHistory = new DiffHistory({
+    root: cwd,
+    maxBytes: diffConfig.historyMaxSizeMB * 1024 * 1024,
+  });
 
   // ------------------------------------------------------------------
   // Workspace trust (v0.8) — the Claude-Code-style one-time folder check.
@@ -844,8 +909,37 @@ export async function runChat(
   const contextTokens = projectAgent?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
   const compactModel = projectAgent?.compactModel;
 
-  const renderDiff = (before: string, after: string): readonly string[] =>
-    renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 });
+  const termWidth = (): number =>
+    process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
+  const diffRenderOpts = (): RenderOptions => ({
+    view: diffConfig.view,
+    width: termWidth(),
+    maxLines: diffConfig.maxLines,
+    palette: diffConfig.palette,
+    syntaxHighlight: diffConfig.syntaxHighlight,
+    wordDiff: diffConfig.wordDiff,
+    showWhitespace: diffConfig.showWhitespace,
+    expandGenerated: !diffConfig.collapseGenerated,
+  });
+  /**
+   * v1.3: every before/after the loop surfaces becomes a boxed FileDiff render
+   * (the path carries the title + syntax language). Kind is inferred from the
+   * empty side — the same convention the tools' diff payloads follow.
+   */
+  const renderDiff = (before: string, after: string, path?: string): readonly string[] => {
+    const p = path ?? 'file';
+    const change: FileChange =
+      before === '' && after !== ''
+        ? { kind: 'created', path: p, newText: after }
+        : after === '' && before !== ''
+          ? { kind: 'deleted', path: p, oldText: before }
+          : { kind: 'modified', path: p, oldText: before, newText: after };
+    return renderFileDiff(
+      computeFileDiff(change, { context: diffConfig.context }),
+      theme,
+      diffRenderOpts(),
+    );
+  };
   // v1.0 subagents: the model can delegate self-contained tasks to nested
   // agent loops. Safe mode (--safe) excludes it — read-only means read-only.
   if (!flags.safe) {
@@ -891,6 +985,195 @@ export async function runChat(
   const arbiter = new SpinnerArbiter(() => spinner, ctx.io.writeErr);
   // The spinner redraws a line in place — only meaningful on a real TTY.
   const spinnerAllowed = process.stderr.isTTY === true && !ctx.json;
+
+  // ------------------------------------------------------------------
+  // v1.3: the diff review pipeline. write_file/edit_file dry runs carry a
+  // diff payload; with an interactive TTY those calls route through the
+  // review UI (manual mode), print-and-apply (acceptEdits/auto modes), or
+  // the [a]-primed auto path. Applies are path-guarded, conflict-checked
+  // against the dry-run read, secret-scanned, atomic, and checkpointed into
+  // .selora/history (the /undo /redo /diff commands below).
+  // ------------------------------------------------------------------
+  const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+  interface HookChange {
+    path: string;
+    before: string;
+    after: string;
+    kind: 'created' | 'modified' | 'deleted';
+  }
+
+  const toFileChange = (c: HookChange): FileChange =>
+    c.kind === 'created'
+      ? { kind: 'created', path: c.path, newText: c.after }
+      : c.kind === 'deleted'
+        ? { kind: 'deleted', path: c.path, oldText: c.before }
+        : { kind: 'modified', path: c.path, oldText: c.before, newText: c.after };
+
+  /** The absolute path for a hook change's display path (outside paths arrive absolute). */
+  const hookAbs = (p: string): string => (isAbsolute(p) ? p : resolve(cwd, p));
+
+  /**
+   * The conflict check: the dry run computed its diff from the disk content
+   * (`before`); bytes on disk differing NOW means the change is stale. A
+   * create over an existing non-empty file conflicts too (the write would
+   * silently overwrite something the model never saw).
+   */
+  const conflictNote = (
+    abs: string,
+    before: string,
+    kind: HookChange['kind'],
+  ): string | undefined => {
+    const snap = readSnapshot(abs);
+    if (kind === 'created') {
+      return snap !== undefined && snap.text !== ''
+        ? 'the file already exists on disk — applying would overwrite it'
+        : undefined;
+    }
+    if (snap === undefined) return 'the file vanished from disk since the diff was computed';
+    return snap.text !== before
+      ? 'the file changed on disk since the diff was computed'
+      : undefined;
+  };
+
+  /** A boxed diff + secret/conflict notes on the UI channel (spinner-safe). */
+  const printDiffBlock = (
+    fd: FileDiff,
+    secrets: readonly SecretFinding[],
+    conflict: string | undefined,
+  ): void => {
+    for (const line of renderFileDiff(fd, theme, diffRenderOpts())) arbiter.uiLine(line);
+    for (const s of secrets) {
+      arbiter.uiLine(
+        theme.warning(`⚠ possible secret on line ${s.line} (${s.rule}): ${s.snippet}`),
+      );
+    }
+    if (conflict !== undefined) arbiter.uiLine(theme.warning(`⚠ conflict: ${conflict}`));
+  };
+
+  /** Applied changes this turn (for the combined same-file diff at turn end). */
+  const turnFileChanges: HookChange[] = [];
+  let applyAllFileChanges = false; // [a] apply-all — this turn only
+  let reviewCancelled = false; // [q] cancel — stop presenting changes this turn
+
+  /**
+   * The guarded writer behind an approved review decision: path guard →
+   * fail-closed conflict check → optional hunk-subset apply → atomic write
+   * (mode-preserving) → history checkpoint. Never throws; the summary goes
+   * back to the model as the tool result.
+   */
+  const applyFileChange = async (
+    change: HookChange,
+    acceptedHunks: readonly number[] | undefined,
+  ): Promise<{ ok: boolean; summary: string }> => {
+    const g = guardPath(cwd, hookAbs(change.path));
+    if (!g.ok) return { ok: false, summary: g.error.message };
+    if (change.kind === 'deleted') {
+      return { ok: false, summary: 'deletes are the remove tool’s job — nothing written' };
+    }
+    const conflictNow = conflictNote(g.value, change.before, change.kind);
+    if (conflictNow !== undefined) {
+      return {
+        ok: false,
+        summary: `conflict: ${conflictNow} — re-read the file and retry the edit`,
+      };
+    }
+    let finalText = change.after;
+    let partialNote = '';
+    if (acceptedHunks !== undefined) {
+      if (acceptedHunks.length === 0) {
+        return { ok: true, summary: `no hunks selected — ${change.path} left unchanged` };
+      }
+      const fd = computeFileDiff(toFileChange(change), { context: diffConfig.context });
+      const applied = applyHunks(change.before, fd, acceptedHunks);
+      if (!applied.ok) {
+        return { ok: false, summary: `partial apply failed: ${applied.error.message}` };
+      }
+      finalText = applied.value;
+      partialNote = ` (${acceptedHunks.length} of ${fd.hunks.length} hunks)`;
+    }
+    const snap = readSnapshot(g.value);
+    try {
+      mkdirSync(dirname(g.value), { recursive: true });
+    } catch (err) {
+      return { ok: false, summary: `cannot create the parent directories: ${errText(err)}` };
+    }
+    const w = atomicWriteFile(g.value, finalText, { mode: snap?.mode });
+    if (!w.ok) return { ok: false, summary: w.error.message };
+    diffHistory.record({
+      absPath: g.value,
+      displayPath: change.path,
+      changeKind: change.kind,
+      beforeText: change.kind === 'created' ? undefined : change.before,
+      afterText: finalText,
+      mode: snap?.mode,
+    });
+    turnFileChanges.push({ ...change, after: finalText });
+    const fd = computeFileDiff(toFileChange({ ...change, after: finalText }), {
+      context: diffConfig.context,
+    });
+    return {
+      ok: true,
+      summary: `${change.kind === 'created' ? 'created' : 'edited'} ${change.path}${partialNote} (+${fd.stats.added} −${fd.stats.removed})`,
+    };
+  };
+
+  const useReview = ctx.io.isTTY && !ctx.json && flags.yes !== true;
+  const fileChange: FileChangeHooks | undefined = useReview
+    ? {
+        review: async (change) => {
+          const fd = computeFileDiff(toFileChange(change), { context: diffConfig.context });
+          const secrets =
+            diffConfig.secretScan && change.kind !== 'deleted' ? scanSecrets(change.after) : [];
+          const conflict = conflictNote(hookAbs(change.path), change.before, change.kind);
+          if (reviewCancelled) return { action: 'cancel' };
+          const autoByMode = mode === 'acceptEdits' || mode === 'auto';
+          const autoByAll = applyAllFileChanges && secrets.length === 0 && conflict === undefined;
+          if (diffConfig.reviewMode === 'ask' && !autoByMode && !autoByAll) {
+            const decision = await reviewChange(
+              { diff: fd, secrets, conflict },
+              {
+                stdin: ctx.io.stdin,
+                isTTY: ctx.io.isTTY,
+                write: (s) => ctx.io.err(s),
+                nextLine: async () => {
+                  askerLineWaits += 1;
+                  try {
+                    return await nextLine();
+                  } finally {
+                    askerLineWaits -= 1;
+                  }
+                },
+                pauseInput: () => rl.pause(),
+                resumeInput: menuOn ? resumeInputRaw : () => rl.resume(),
+              },
+              { mode: 'ask', theme, render: diffRenderOpts() },
+            );
+            if (decision.action === 'apply-all') applyAllFileChanges = true;
+            if (decision.action === 'cancel') reviewCancelled = true;
+            return decision;
+          }
+          // The auto paths still print the diff (spec: auto applies, still
+          // prints) — secret and conflict notes ride along.
+          printDiffBlock(fd, secrets, conflict);
+          return { action: 'apply' };
+        },
+        apply: applyFileChange,
+      }
+    : undefined;
+
+  /** The classic-gate checkpoint (v1.3 onFileChange): history + turn tracking. */
+  const recordFileChange = (rec: HookChange): void => {
+    diffHistory.record({
+      absPath: hookAbs(rec.path),
+      displayPath: rec.path,
+      changeKind: rec.kind,
+      beforeText: rec.kind === 'created' ? undefined : rec.before,
+      afterText: rec.after,
+      mode: undefined, // the pre-change mode is unknowable post-hoc
+    });
+    turnFileChanges.push({ ...rec });
+  };
 
   /**
    * The prompt block: a dim context line (model · cwd · tokens), the dim
@@ -1141,6 +1424,112 @@ export async function runChat(
       },
     },
     {
+      name: 'undo',
+      description: 'undo the last applied file change (checkpointed in .selora/history)',
+      run: () => {
+        const res = diffHistory.undo();
+        if (!res.ok) {
+          r.bullet(res.error.message);
+          return;
+        }
+        r.ok(
+          `undid ${res.value.displayPath} (${res.value.action === 'removed' ? 'file removed' : 'previous content restored'})`,
+        );
+        r.bullet(
+          'the model does not know about the undo — mention it if it matters; /redo re-applies',
+        );
+      },
+    },
+    {
+      name: 'redo',
+      description: 're-apply the last undone file change',
+      run: () => {
+        const res = diffHistory.redo();
+        if (!res.ok) {
+          r.bullet(res.error.message);
+          return;
+        }
+        r.ok(`redid ${res.value.displayPath} (${res.value.action})`);
+      },
+    },
+    {
+      name: 'diff',
+      argsHint: '[all|export]',
+      description: 're-show applied diffs: last one, all this session, or a .patch export',
+      run: (args) => {
+        /** A checkpoint back into the FileChange the engine diffs. */
+        const checkpointToChange = (e: Checkpoint): FileChange =>
+          e.changeKind === 'created'
+            ? { kind: 'created', path: e.displayPath, newText: e.afterText ?? '' }
+            : e.changeKind === 'deleted'
+              ? { kind: 'deleted', path: e.displayPath, oldText: e.beforeText ?? '' }
+              : e.changeKind === 'renamed'
+                ? {
+                    kind: 'renamed',
+                    oldPath: e.displayPath,
+                    path: e.displayPath,
+                    oldText: e.beforeText ?? '',
+                    newText: e.afterText ?? '',
+                    similarity: 1,
+                  }
+                : {
+                    kind: 'modified',
+                    path: e.displayPath,
+                    oldText: e.beforeText ?? '',
+                    newText: e.afterText ?? '',
+                  };
+        if (args === 'export') {
+          const entries = diffHistory.list();
+          if (entries.length === 0) {
+            r.bullet('Nothing to export — no applied changes yet this session.');
+            return;
+          }
+          const patches = entries.map((e) =>
+            toUnifiedPatch(computeFileDiff(checkpointToChange(e), { context: diffConfig.context })),
+          );
+          const out = join(cwd, '.selora', 'session-changes.patch');
+          try {
+            mkdirSync(dirname(out), { recursive: true });
+            writeFileSync(out, `${patches.join('\n')}\n`, 'utf8');
+          } catch (err) {
+            r.fail(`could not write the patch: ${errText(err)}`);
+            return;
+          }
+          r.ok(
+            `wrote ${out} — ${entries.length} change${entries.length === 1 ? '' : 's'}; apply with: git apply ${out}`,
+          );
+          return;
+        }
+        if (args === 'all') {
+          const entries = diffHistory.list();
+          if (entries.length === 0) {
+            r.bullet('No applied file changes yet this session.');
+            return;
+          }
+          const diffs = entries.map((e) =>
+            computeFileDiff(checkpointToChange(e), { context: diffConfig.context }),
+          );
+          for (const line of renderChangeSetSummary(diffs, theme)) ctx.io.writeErr(`${line}\n`);
+          for (const fd of diffs) printDiffBlock(fd, [], undefined);
+          return;
+        }
+        if (args !== '') {
+          r.bullet('usage: /diff [all|export]');
+          return;
+        }
+        const last = diffHistory.last();
+        if (last === undefined) {
+          r.bullet('No applied file changes yet this session.');
+          return;
+        }
+        printDiffBlock(
+          computeFileDiff(checkpointToChange(last), { context: diffConfig.context }),
+          [],
+          undefined,
+        );
+      },
+    },
+    {
       name: 'exit',
       description: 'end the session (Ctrl+D also works)',
       run: () => 'exit',
@@ -1262,6 +1651,10 @@ export async function runChat(
     // The Ctrl+R pool (v0.9): the RAW line as typed, so a re-inserted prompt
     // round-trips (@image tokens and the `\!` escape intact).
     sentPrompts.push(trimmed);
+    // v1.3: the review UI's turn-scoped state resets per user message.
+    applyAllFileChanges = false;
+    reviewCancelled = false;
+    turnFileChanges.length = 0;
     const controller = new AbortController();
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
@@ -1347,6 +1740,12 @@ export async function runChat(
         autoApprove: flags.yes === true && ctx.json,
         allows,
         renderDiff,
+        // v1.3: dry-run mode shows proposals and writes nothing; the review
+        // pipeline owns write_file/edit_file approval on a TTY; every classic-
+        // gate write is checkpointed for /undo.
+        dryRun: diffConfig.reviewMode === 'dry-run',
+        fileChange,
+        onFileChange: recordFileChange,
         signal: controller.signal,
         // v0.9: plan mode — mutating tool calls become /plan proposals.
         planGate: {
@@ -1458,6 +1857,29 @@ export async function runChat(
       }
       for (const e of result.toolEvents) {
         if (e.ok && WRITE_TOOL_NAMES.has(e.name)) filesChanged.add(e.label);
+      }
+      // v1.3: a file edited several times this turn gets one COMBINED diff
+      // (first before → final after) at the end of the turn.
+      {
+        const counts = new Map<string, number>();
+        for (const ch of turnFileChanges) counts.set(ch.path, (counts.get(ch.path) ?? 0) + 1);
+        const combined = new Map<string, HookChange>();
+        for (const ch of turnFileChanges) {
+          const entry = combined.get(ch.path);
+          if (entry === undefined) combined.set(ch.path, { ...ch });
+          else entry.after = ch.after;
+        }
+        for (const [path, entry] of combined) {
+          const n = counts.get(path) ?? 0;
+          if (n > 1) {
+            arbiter.uiLine(theme.dim(`· combined diff for ${path} (edited ${n}× this turn)`));
+            printDiffBlock(
+              computeFileDiff(toFileChange(entry), { context: diffConfig.context }),
+              [],
+              undefined,
+            );
+          }
+        }
       }
       if (result.stop === 'max-turns') {
         r.bullet(`stopped at the turn cap (${maxTurns}) — raise agent.maxTurns in selora.json`);
