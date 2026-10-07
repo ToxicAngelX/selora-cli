@@ -44,6 +44,7 @@ import {
   closeSync,
   copyFileSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
   renameSync,
@@ -255,6 +256,19 @@ export function atomicWriteFile(
 ): SafeResult<{ bytes: number }> {
   const dir = dirname(abs);
   const tmp = join(dir, `.${basename(abs)}.selora-${randomUUID()}.tmp`);
+  // A directory target is EISDIR on every platform — fail fast before the tmp
+  // exists (win32's rename answers EPERM there, and retrying a directory is
+  // pure noise).
+  try {
+    if (lstatSync(abs).isDirectory()) {
+      return {
+        ok: false,
+        error: { code: 'EISDIR', message: `target is a directory: ${abs}`, path: abs },
+      };
+    }
+  } catch {
+    // absent target — the normal write path
+  }
   let fd: number | undefined;
   try {
     fd = openSync(tmp, 'w');

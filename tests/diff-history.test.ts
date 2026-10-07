@@ -367,7 +367,12 @@ describe('DiffHistory', () => {
 
     expect(h.undo().ok).toBe(true);
     expect(readFileSync(file, 'utf8')).toBe('locked\n');
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // POSIX mode bits are unrepresentable on Windows (only the read-only flag
+    // maps) — the restore is still best-effort there; assert the mode only
+    // where the filesystem honors it.
+    if (process.platform !== 'win32') {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('failure-atomic: a failed undo moves no stacks and can be retried', () => {

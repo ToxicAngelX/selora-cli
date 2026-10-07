@@ -49,7 +49,7 @@ describe('runUpdate', () => {
     const { io, cap } = capturedIo();
     let installed = 0;
     await runUpdate(ctx(io), {
-      fetchLatestVersion: async () => '1.4.0',
+      fetchLatestVersion: async () => '1.5.0',
       install: async () => {
         installed += 1;
         return { code: 0 };
@@ -69,7 +69,7 @@ describe('runUpdate', () => {
     let installed = 0;
     await runUpdate(ctx(io), {
       check: true,
-      fetchLatestVersion: async () => '1.4.0',
+      fetchLatestVersion: async () => '1.5.0',
       install: async () => {
         installed += 1;
         return { code: 0 };
@@ -77,7 +77,7 @@ describe('runUpdate', () => {
     });
     const text = cap.all();
     expect(text).toContain('update available');
-    expect(text).toContain('npm install -g selora@1.4.0');
+    expect(text).toContain('npm install -g selora@1.5.0');
     expect(installed).toBe(0);
     cleanup(env.dir);
   });
@@ -88,14 +88,14 @@ describe('runUpdate', () => {
     const versions: string[] = [];
     await runUpdate(ctx(io), {
       yes: true,
-      fetchLatestVersion: async () => '1.4.0',
+      fetchLatestVersion: async () => '1.5.0',
       install: async (v) => {
         versions.push(v);
         return { code: 0 };
       },
     });
-    expect(versions).toEqual(['1.4.0']);
-    expect(cap.all()).toContain('✓ updated to 1.4.0');
+    expect(versions).toEqual(['1.5.0']);
+    expect(cap.all()).toContain('✓ updated to 1.5.0');
     expect(process.exitCode).toBeUndefined();
     cleanup(env.dir);
   });
@@ -105,12 +105,12 @@ describe('runUpdate', () => {
     const { io, cap } = capturedIo();
     await runUpdate(ctx(io), {
       yes: true,
-      fetchLatestVersion: async () => '1.4.0',
+      fetchLatestVersion: async () => '1.5.0',
       install: async () => ({ code: 1 }),
     });
     const text = cap.all();
     expect(text).toContain('✗ install failed');
-    expect(text).toContain('npm install -g selora@1.4.0');
+    expect(text).toContain('npm install -g selora@1.5.0');
     expect(process.exitCode).toBe(1);
     process.exitCode = undefined;
     cleanup(env.dir);
@@ -132,7 +132,7 @@ describe('runUpdate', () => {
     env = freshEnv();
     const { io, cap } = capturedIo();
     await runUpdate(ctx(io, true), {
-      fetchLatestVersion: async () => '1.4.0',
+      fetchLatestVersion: async () => '1.5.0',
     });
     const parsed = JSON.parse(cap.out.join('\n').trim()) as {
       ok: boolean;
@@ -142,8 +142,8 @@ describe('runUpdate', () => {
     };
     expect(parsed).toEqual({
       ok: true,
-      current: '1.3.0',
-      latest: '1.4.0',
+      current: '1.3.1',
+      latest: '1.5.0',
       update_available: true,
     });
     cleanup(env.dir);

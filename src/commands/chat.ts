@@ -1010,8 +1010,18 @@ export async function runChat(
         ? { kind: 'deleted', path: c.path, oldText: c.before }
         : { kind: 'modified', path: c.path, oldText: c.before, newText: c.after };
 
-  /** The absolute path for a hook change's display path (outside paths arrive absolute). */
-  const hookAbs = (p: string): string => (isAbsolute(p) ? p : resolve(cwd, p));
+  /**
+   * The absolute path for a hook change's display path (outside paths arrive
+   * absolute). For the guard we pass the DISPLAY path through unchanged —
+   * guardPath (resolveToolPath) resolves it against the REALPATHED root;
+   * pre-resolving against the raw cwd breaks on macOS, where the tmpdir is a
+   * symlink (/var → /private/var) and the unresolved path fails containment.
+   */
+  const hookAbs = (p: string): string => {
+    if (isAbsolute(p)) return p;
+    const g = guardPath(cwd, p);
+    return g.ok ? g.value : resolve(cwd, p);
+  };
 
   /**
    * The conflict check: the dry run computed its diff from the disk content
@@ -1066,7 +1076,9 @@ export async function runChat(
     change: HookChange,
     acceptedHunks: readonly number[] | undefined,
   ): Promise<{ ok: boolean; summary: string }> => {
-    const g = guardPath(cwd, hookAbs(change.path));
+    // The display path goes in UNRESOLVED — resolveToolPath resolves it
+    // against the realpathed root (the macOS tmpdir-symlink case).
+    const g = guardPath(cwd, change.path);
     if (!g.ok) return { ok: false, summary: g.error.message };
     if (change.kind === 'deleted') {
       return { ok: false, summary: 'deletes are the remove tool’s job — nothing written' };

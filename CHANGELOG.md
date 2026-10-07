@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1 — cross-platform CI fixes
+
+- **macOS: reviewed writes failed under symlinked roots** — the review-apply
+  path pre-resolved the display path against the raw cwd, so on macOS (where
+  the tmpdir is a symlink, `/var` → `/private/var`) the sandbox guard saw an
+  un-realpathed path and refused containment. The guard now receives the
+  unresolved display path, exactly like the tools call it.
+- **Windows: atomic write onto a directory reports EISDIR** — win32's rename
+  answers EPERM there (and it was retried); the target is now checked up
+  front and refused honestly, same as POSIX.
+- **Windows: history test** — the mode-restore assertion is POSIX-only
+  (win32 chmod maps to the read-only flag; the restore stays best-effort).
+
 ## 1.3.0 — the diff system
 
 - **A real diff subsystem** (`src/diff/`) — a pure engine (hunks, word-level

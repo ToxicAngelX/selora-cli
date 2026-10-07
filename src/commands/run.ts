@@ -59,7 +59,7 @@ import type { Tool } from '../agent/tool.js';
 import { themeFor } from '../ui/theme.js';
 import { renderToolResult, renderToolStart } from '../ui/chatui.js';
 import { resolveDiffConfig } from '../config/diff.js';
-import { computeFileDiff, DiffHistory, renderFileDiff } from '../diff/index.js';
+import { computeFileDiff, DiffHistory, guardPath, renderFileDiff } from '../diff/index.js';
 import type { FileChange, RenderOptions } from '../diff/types.js';
 import {
   loadSession,
@@ -378,8 +378,12 @@ export async function runRun(
       renderDiff,
       dryRun: diffConfig.reviewMode === 'dry-run',
       onFileChange: (rec) => {
+        // Resolve through the sandbox guard so the checkpoint records the
+        // REALPATHED absolute path (macOS tmpdir is a symlink — a naive
+        // resolve(cwd, …) fails containment there).
+        const g = guardPath(cwd, rec.path);
         diffHistory.record({
-          absPath: isAbsolute(rec.path) ? rec.path : resolve(cwd, rec.path),
+          absPath: g.ok ? g.value : isAbsolute(rec.path) ? rec.path : resolve(cwd, rec.path),
           displayPath: rec.path,
           changeKind: rec.kind,
           beforeText: rec.kind === 'created' ? undefined : rec.before,
