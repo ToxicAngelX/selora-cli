@@ -48,7 +48,7 @@ afterAll(async () => {
 });
 
 function realTempDir(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix))); // .native = product canonicalization (8.3 long-form on Windows)
 }
 
 async function tick(): Promise<void> {
@@ -114,7 +114,7 @@ describe('runTrustScreen — the picker', () => {
     const shown = h.text();
     expect(shown).toContain('Accessing workspace:');
     // the path renders exactly as homeAbbrev computes it for this env
-    expect(shown).toContain(` ${homeAbbrev(realpathSync(cwd))}`);
+    expect(shown).toContain(` ${homeAbbrev(realpathSync.native(cwd))}`);
     expect(shown).toContain('Quick safety check: is this a folder you created or one you trust?');
     expect(shown).toContain('read, edit, and run commands here.');
     expect(shown).toContain('❯ 1. Yes, I trust this folder');

@@ -47,7 +47,7 @@ afterAll(() => {
 
 /** A real temp dir, canonicalized (macOS tmpdir is a symlink). */
 function realTempDir(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix))); // .native = product canonicalization (8.3 long-form on Windows)
 }
 
 describe('trust store', () => {

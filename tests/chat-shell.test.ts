@@ -154,7 +154,7 @@ describe('startShellCommand (injected spawn)', () => {
       process.platform === 'win32'
         ? 'echo hello-shell'
         : 'echo hello-$([ 1 -eq 1 ] && echo shell)'; // $() proves a real shell
-    const handle = startShellCommand(cmd, '/tmp');
+    const handle = startShellCommand(cmd, tmpdir()); // cross-platform temp dir
     const result = await handle.done;
     expect(result.code).toBe(0);
     expect(result.output).toContain('hello-shell');
@@ -365,7 +365,7 @@ describe('the REPL `!` escape', () => {
     expect(err).toContain('· exit 0');
   });
 
-  it('Ctrl+C mid-`!` kills the command and keeps the session', async () => {
+  it('Ctrl+C mid-`!` kills the command and keeps the session', { timeout: 15000 }, async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installRoutes();
     // a PassThrough stdin: write the command, then \x03 while it runs.

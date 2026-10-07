@@ -30,7 +30,7 @@ function ctx(io: CliIo, json = false): CliContext {
 }
 
 function realTempDir(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix))); // .native = product canonicalization (8.3 long-form on Windows)
 }
 
 describe('selora trust', () => {

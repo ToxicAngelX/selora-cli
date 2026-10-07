@@ -158,7 +158,19 @@ export function startShellCommand(
     // which IGNORES SIGINT while a foreground child runs (verified: SIGINT to
     // sh leaves the command running; sh then dies when the child exits on its
     // own). -pid (negative) reaches sh AND its descendants on POSIX. Windows
-    // keeps the direct signal (TerminateProcess semantics kill the tree).
+    // has no signal groups — kill the direct pid only TerminateProcess ORPHANS
+    // the grandchildren (a `sh -c` grandchild kept the EBUSY lock on the temp
+    // cwd in CI), so taskkill /T /F takes the whole tree down instead.
+    if (process.platform === 'win32' && typeof child.pid === 'number') {
+      try {
+        spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
+        escalate = setTimeout(() => undefined, SHELL_KILL_GRACE_MS);
+        escalate.unref?.();
+        return;
+      } catch {
+        // fall through to the signal path — best effort
+      }
+    }
     const groupPid =
       process.platform !== 'win32' && typeof child.pid === 'number' ? -child.pid : child.pid;
     const sig = (sigName: 'SIGINT' | 'SIGKILL'): void => {

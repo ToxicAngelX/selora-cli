@@ -4,7 +4,7 @@
  * driving prompts in-process.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -42,9 +42,13 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
-/** Create a fresh temp dir and point XDG_CONFIG_HOME (and HOME) at it. */
+/** Create a fresh temp dir and point XDG_CONFIG_HOME (and HOME) at it.
+ * The dir is canonicalized (realpathSync.native) so HOME matches the form
+ * the product's own canonicalDir() produces — on Windows runners tmpdir()
+ * returns an 8.3 short path (RUNNER~1) while .native expands to long form;
+ * comparing the two spellings never matched. */
 export function freshEnv(): TempEnv {
-  const dir = mkdtempSync(join(tmpdir(), 'selora-test-'));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'selora-test-')));
   const xdg = join(dir, 'xdg');
   process.env['XDG_CONFIG_HOME'] = xdg;
   process.env['HOME'] = dir;
