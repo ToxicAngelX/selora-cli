@@ -167,7 +167,10 @@ describe('the single queued prompt (v0.9)', () => {
     stdin.write('first\n');
     await until(() => chatBodies().length === 1, 'turn 1 in flight');
     stdin.write('second\n');
-    await until(() => cap.err().includes('· queued — runs when this turn finishes'), 'queued notice');
+    await until(
+      () => cap.err().includes('· queued — runs when this turn finishes'),
+      'queued notice',
+    );
     stdin.write('third\n');
     await until(
       () => cap.err().includes('· one prompt already queued — it runs next'),
@@ -183,11 +186,16 @@ describe('the single queued prompt (v0.9)', () => {
     expect(lastUser?.content).toBe('second');
     // the discarded line never reached the model anywhere
     expect(JSON.stringify(chatBodies())).not.toContain('third');
+    // v1.2.1: the queued line was never echoed mid-turn (the spinner owned the
+    // row) — it is replayed as a `❯ …` prompt row when the turn actually runs…
+    expect(cap.err()).toContain('❯ second');
 
     await until(() => cap.out().includes('Second reply'), 'turn 2 reply');
     stdin.write('/exit\n');
     await session;
     expect(cap.all()).toContain('✓ Session ended');
+    // …and its raw echo never leaked onto the reply channel mid-turn
+    expect(cap.out()).not.toContain('second');
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -196,11 +204,15 @@ describe('the single queued prompt (v0.9)', () => {
     const { chatBodies } = routeHangOn(new Set([1]));
     const { io, stdin, cap } = controlledIo();
     let interrupt: (() => void) | undefined;
-    const session = runChat(ctx(io), { cwd: chatCwd() }, {
-      registerInterrupt: (fn) => {
-        interrupt = fn;
+    const session = runChat(
+      ctx(io),
+      { cwd: chatCwd() },
+      {
+        registerInterrupt: (fn) => {
+          interrupt = fn;
+        },
       },
-    });
+    );
 
     await waitForPrompt(cap);
     stdin.write('first\n');
@@ -228,18 +240,23 @@ describe('the single queued prompt (v0.9)', () => {
     const { chatBodies } = routeHangOn(new Set([1]));
     const { io, stdin, cap } = controlledIo();
     let interrupt: (() => void) | undefined;
-    const session = runChat(ctx(io), { cwd: chatCwd() }, {
-      registerInterrupt: (fn) => {
-        interrupt = fn;
+    const session = runChat(
+      ctx(io),
+      { cwd: chatCwd() },
+      {
+        registerInterrupt: (fn) => {
+          interrupt = fn;
+        },
       },
-    });
+    );
 
     await waitForPrompt(cap);
     stdin.write('first\n');
     await until(() => chatBodies().length === 1, 'turn in flight');
     stdin.write('! echo should-not-run\n');
     await until(
-      () => cap.err().includes('· a turn is streaming — ! commands wait for the prompt (not queued)'),
+      () =>
+        cap.err().includes('· a turn is streaming — ! commands wait for the prompt (not queued)'),
       'refusal notice',
     );
     expect(cap.err()).not.toContain('· queued — runs when this turn finishes');
@@ -260,11 +277,15 @@ describe('the single queued prompt (v0.9)', () => {
     const cwd = chatCwd();
     const { io, stdin, cap } = controlledIo();
     let interrupt: (() => void) | undefined;
-    const session = runChat(ctx(io), { cwd }, {
-      registerInterrupt: (fn) => {
-        interrupt = fn;
+    const session = runChat(
+      ctx(io),
+      { cwd },
+      {
+        registerInterrupt: (fn) => {
+          interrupt = fn;
+        },
       },
-    });
+    );
 
     await waitForPrompt(cap);
     // turn 1 completes → auto-saved

@@ -32,6 +32,43 @@ export const SPINNER_WORDS: readonly string[] = [
 const CLEAR_LINE = '\r\x1b[2K';
 
 /**
+ * Line discipline between the in-place spinner and everything else that
+ * shares the terminal. Two rules, both enforced here:
+ *
+ *  1. stopForContent() — streamed REPLY text always stops the spinner
+ *     outright. A live spinner redraws its row every ~150 ms, so any content
+ *     printed while it runs lands glued onto the spinner's line — the v1.2
+ *     corruption (`✦ Thinking… 2s · ctrl+c to interruptDone! …`). Thinking
+ *     models interleave reasoning deltas between paragraphs and re-arm the
+ *     spinner each time; a one-shot stop cannot cover that.
+ *  2. uiLine() — a UI line (footer, tool row, queue notice) YIELDS the row
+ *     instead: the spinner's line is erased first, the line prints, and the
+ *     spinner's next tick redraws itself on the fresh row below. Work is
+ *     still in flight, so the spinner keeps running — it just can never glue.
+ *
+ * The spinner is read through a getter so a mid-session /theme swap (which
+ * replaces the Spinner instance) never strands the arbiter.
+ */
+export class SpinnerArbiter {
+  constructor(
+    private readonly spinner: () => Spinner,
+    private readonly write: (s: string) => void,
+  ) {}
+
+  /** Rule 1 — before writing streamed reply text. Cheap when already stopped. */
+  stopForContent(): void {
+    this.spinner().stop();
+  }
+
+  /** Rule 2 — one UI line on the spinner's channel, yielded when the row is owned. */
+  uiLine(line: string): void {
+    const s = this.spinner();
+    if (s.running) this.write(CLEAR_LINE);
+    this.write(`${line}\n`);
+  }
+}
+
+/**
  * Per-character gradient that rotates by `offset` chars per call — a hue
  * shimmer sweeping across the word. Whitespace stays bare; identity when the
  * theme is disabled. The rotation wraps (modulo), so a seam travels through

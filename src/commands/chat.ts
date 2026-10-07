@@ -2,6 +2,25 @@
  * `selora chat [--model <id>] [--safe] [--yes]` — the interactive agent REPL
  * (v0.7: slash-command menu + @path completion at the prompt).
  *
+ * What changed in v1.2.1 (terminal line discipline — the garbled-render fixes):
+ *  - the spinner and the reply share ONE terminal cursor; a SpinnerArbiter
+ *    now enforces who owns the row. Streamed reply text always stops the
+ *    spinner outright (thinking models re-arm it between paragraphs via
+ *    reasoning deltas — the old one-shot stop let `✦ Thinking…` glue onto
+ *    every paragraph); UI lines (footer, tool rows, queue notices) YIELD the
+ *    row instead — erased first, spinner redraws below on its next tick.
+ *  - unpin()'s DECSTBM reset HOMES the cursor per the DEC spec, which printed
+ *    the exit summary over the banner art and handed the shell a corrupted
+ *    screen. A pinned exit now lands as a closing card: cursor parked below
+ *    the banner, rows beneath erased, summary prints clean.
+ *  - mid-turn typing no longer echoes onto the spinner's row (readline's
+ *    echo is swallowed while a turn/`!` command runs — except while a
+ *    line-based permission ask awaits the answer). A line queued mid-turn is
+ *    replayed as a proper `❯ …` row when it actually runs, so the transcript
+ *    always shows what was sent.
+ *  - the compaction pulse no longer fights the spinner for the row (the
+ *    spinner starts only once the request is actually in flight).
+ *
  * What changed in v0.9 (docs/commands/chat.md):
  *  - Ctrl+R at the prompt opens a history search over this session's sent
  *    prompts plus every persisted session of the project (the store
@@ -148,7 +167,7 @@ import {
 import { playFrames, trimEnd } from '../ui/animate.js';
 import { MarkdownStream } from '../ui/markdown.js';
 import { renderUnifiedDiff } from '../ui/diff.js';
-import { Spinner } from '../ui/spinner.js';
+import { Spinner, SpinnerArbiter } from '../ui/spinner.js';
 import { diffStyleFor, markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
 import {
   PromptRouter,
@@ -349,6 +368,8 @@ export async function runChat(
   let regionActive = false;
   let ambientScene: LogoScene | null = null;
   let ambientWidth = 80;
+  /** Banner rows while pinned — the closing-card teardown parks below them. */
+  let pinnedHeight = 0;
 
   function ambientBurst(tick: number): void {
     const rows =
@@ -369,7 +390,7 @@ export async function runChat(
     // and print a fresh STATIC banner inline at the new width (the session
     // continues normally; /exit + restart restores the pinned banner).
     unpin();
-    const w = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80);
+    const w = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
     for (const line of renderStartupScreen(theme, { width: w })) r.line(line);
   }
 
@@ -385,7 +406,17 @@ export async function runChat(
     }
   }
 
-  function unpin(): void {
+  /**
+   * Tear the pinned region down. The DECSTBM reset (`\x1b[r`) HOMES the cursor
+   * per the DEC spec — left alone, whatever prints next lands on banner row 1
+   * and overprints the art (the v1.2 exit-summary corruption, and the shell
+   * prompt inherited the mess after exit). With closingCard the cursor parks
+   * just below the banner and everything under it is erased, so the exit
+   * summary prints as a clean closing frame and the shell gets a tidy edge.
+   * The resize path passes false: the session continues, and the fresh static
+   * banner reprint wants the home position as-is.
+   */
+  function unpin(closingCard = false): void {
     if (ambientTimer !== undefined) {
       clearInterval(ambientTimer);
       ambientTimer = undefined;
@@ -393,13 +424,15 @@ export async function runChat(
     process.stdout.removeListener('resize', onResize);
     process.removeListener('exit', exitReset);
     if (regionActive) {
-      ctx.io.writeOut('\x1b[r');
+      ctx.io.writeOut(closingCard ? `\x1b[r\x1b[${pinnedHeight + 1};1H\x1b[J` : '\x1b[r');
       regionActive = false;
+      pinnedHeight = 0;
     }
   }
 
   if (!ctx.json) {
-    const width = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80);
+    const width =
+      process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
     const rows = process.stdout.rows ?? 24;
     const height = bannerHeight(width);
     // Animation gates on the REAL stdout (a captured test io never animates)
@@ -416,6 +449,7 @@ export async function runChat(
       // Take over the screen: clear + home, then the intro sweep at the top.
       ctx.io.writeOut('\x1b[2J\x1b[H');
       ambientWidth = width;
+      pinnedHeight = height;
       ambientScene = height > 1 ? makeLogoScene(width, Math.random) : null;
       const sweep = Array.from({ length: STARTUP_FRAME_COUNT }, (_, k) =>
         ambientScene !== null
@@ -454,6 +488,27 @@ export async function runChat(
     }
   }
 
+  // Turn state — declared before the echo writer, which reads it per write.
+  /** A queued input line; `silent` lines arrived mid-turn and were never echoed. */
+  interface QueuedLine {
+    text: string;
+    silent: boolean;
+  }
+  const queued: QueuedLine[] = [];
+  const waiters: Array<{
+    resolve: (entry: QueuedLine) => void;
+    reject: (err: Error) => void;
+  }> = [];
+  let closed = false;
+  let currentAbort: AbortController | null = null;
+  /** Set while a `!` shell command runs (Ctrl+C kills it instead of exiting). */
+  let currentShellKill: (() => void) | null = null;
+  /** Lines a line-based permission ask is waiting for (its echo must flow). */
+  let askerLineWaits = 0;
+
+  /** A turn (model) or a `!` command is running — the prompt is not waiting. */
+  const turnInFlight = (): boolean => currentAbort !== null || currentShellKill !== null;
+
   // Persistent readline interface (the buffering pattern from
   // auth/prompts.ts): lines queue while a turn is streaming, prompts go to
   // stderr, and readline's own echo is forwarded to raw stdout — except in
@@ -461,7 +516,15 @@ export async function runChat(
   // pollute the machine channel).
   const echo = new Writable({
     write(chunk: Buffer, _enc: BufferEncoding, cb: (err?: Error | null) => void): void {
-      if (!ctx.json) ctx.io.writeOut(chunk.toString());
+      // Mid-turn the spinner owns the terminal row: readline's echo would glue
+      // typed characters onto it and the next redraw would eat them (the v1.2
+      // garble). The echo is swallowed while a turn/`!` command runs, and the
+      // line is replayed as a proper `❯ …` row when it actually runs. The one
+      // exception: a line-based permission ask is WAITING for this input —
+      // the spinner is stopped by then and the answer must stay visible.
+      if (!ctx.json && (!turnInFlight() || askerLineWaits > 0)) {
+        ctx.io.writeOut(chunk.toString());
+      }
       cb();
     },
   });
@@ -538,23 +601,16 @@ export async function runChat(
       cwd,
       write: (s) => ctx.io.writeErr(s),
       theme: () => theme,
-      cols: () => (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80),
+      cols: () =>
+        process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80,
     });
     router.attach();
   }
 
-  const queued: string[] = [];
-  const waiters: Array<{ resolve: (line: string) => void; reject: (err: Error) => void }> = [];
-  let closed = false;
-  let currentAbort: AbortController | null = null;
-  /** Set while a `!` shell command runs (Ctrl+C kills it instead of exiting). */
-  let currentShellKill: (() => void) | null = null;
-
-  /** A turn (model) or a `!` command is running — the prompt is not waiting. */
-  const turnInFlight = (): boolean => currentAbort !== null || currentShellKill !== null;
   /** A dim UI notice on the UI channel (stderr) — never the reply channel. */
   const note = (text: string): void => {
-    ctx.io.writeErr(`${theme.dim(text)}\n`);
+    // Mid-turn the spinner may own the row — yield it, never glue onto it.
+    arbiter.uiLine(theme.dim(text));
   };
 
   // v0.9: at most ONE line queues behind a running turn. The first typed-ahead
@@ -564,10 +620,12 @@ export async function runChat(
   // surprising later moment). Empty lines mid-turn drop silently rather than
   // eat the single slot. Lines arriving with NO turn in flight (startup
   // typed-ahead, piped bursts) keep the v0.8 behavior: queued in order.
+  // v1.2.1: mid-turn lines queue as silent (their echo was swallowed); the
+  // REPL replays them as a `❯ …` row when they actually run.
   rl.on('line', (line: string) => {
     const w = waiters.shift();
     if (w !== undefined) {
-      w.resolve(line);
+      w.resolve({ text: line, silent: false });
       return;
     }
     if (turnInFlight()) {
@@ -578,7 +636,7 @@ export async function runChat(
         return;
       }
       if (queued.length === 0) {
-        queued.push(line);
+        queued.push({ text: line, silent: true });
         note('· queued — runs when this turn finishes');
       } else {
         note('· one prompt already queued — it runs next');
@@ -586,7 +644,7 @@ export async function runChat(
       }
       return;
     }
-    queued.push(line);
+    queued.push({ text: line, silent: false });
   });
   const closeLines = (): void => {
     closed = true;
@@ -610,13 +668,17 @@ export async function runChat(
     rl.close();
   });
 
-  function nextLine(): Promise<string> {
+  function nextEntry(): Promise<QueuedLine> {
     const buffered = queued.shift();
     if (buffered !== undefined) return Promise.resolve(buffered);
     if (closed) return Promise.reject(new PromptClosedError());
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<QueuedLine>((resolve, reject) => {
       waiters.push({ resolve, reject });
     });
+  }
+
+  function nextLine(): Promise<string> {
+    return nextEntry().then((e) => e.text);
   }
 
   // The resume offer (v0.6): a bare `selora chat` with a saved non-empty
@@ -654,7 +716,7 @@ export async function runChat(
     // Unknown model: the backend's own "Model not available" message, verbatim,
     // plus the listing hint. The REPL is NOT started on a bad model.
     process.exitCode = 1;
-    unpin();
+    unpin(true);
     router?.detach();
     rl.close();
     if (err instanceof SeloraApiError) {
@@ -712,7 +774,16 @@ export async function runChat(
           stdin: ctx.io.stdin,
           isTTY: ctx.io.isTTY,
           err: ctx.io.err,
-          nextLine,
+          // Counted: while a LINE-based ask awaits input the echo gate opens
+          // (the answer must stay visible — the spinner is stopped by then).
+          nextLine: async () => {
+            askerLineWaits += 1;
+            try {
+              return await nextLine();
+            } finally {
+              askerLineWaits -= 1;
+            }
+          },
           pauseInput: () => rl.pause(),
           resumeInput: menuOn ? resumeInputRaw : () => rl.resume(),
           rawWrite: ctx.io.writeErr,
@@ -738,7 +809,7 @@ export async function runChat(
     // wrapped (a wrapped input sits more than one row below the mode line;
     // the next full prompt draw shows the new mode instead). DECSC/DECRC
     // save/restore, the universally supported pair.
-    const w = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80);
+    const w = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
     if (rl.line.length + 2 < w) {
       ctx.io.writeErr(`\x1b7\x1b[1A\r\x1b[2K${theme.dim(modeStatusLine(mode))}\x1b8`);
     }
@@ -814,6 +885,10 @@ export async function runChat(
       { theme, tokenSource: () => (sessionTokens > 0 ? sessionTokens : undefined) },
     );
   let spinner = makeSpinner();
+  // The spinner/reply line discipline (v1.2.1): streamed reply content always
+  // stops the spinner outright; UI lines (footer, tool rows, notices) yield
+  // the row and let the spinner's next tick redraw below them.
+  const arbiter = new SpinnerArbiter(() => spinner, ctx.io.writeErr);
   // The spinner redraws a line in place — only meaningful on a real TTY.
   const spinnerAllowed = process.stderr.isTTY === true && !ctx.json;
 
@@ -829,12 +904,18 @@ export async function runChat(
     // turning warning/error as it fills. TTY only (raw escapes + noise).
     if (ctx.io.isTTY && !ctx.json && history.length > 0) {
       ctx.io.writeErr(
-        theme.dim(contextBar(estimateTokensHistory(history), { tokens: contextTokens }, {
-          warning: (s) => theme.warning(s),
-          error: (s) => theme.error(s),
-          gradientAt: (s, i, total) => theme.gradientAt(s, i, total),
-          dim: (s) => theme.dim(s),
-        })) + '\n',
+        theme.dim(
+          contextBar(
+            estimateTokensHistory(history),
+            { tokens: contextTokens },
+            {
+              warning: (s) => theme.warning(s),
+              error: (s) => theme.error(s),
+              gradientAt: (s, i, total) => theme.gradientAt(s, i, total),
+              dim: (s) => theme.dim(s),
+            },
+          ),
+        ) + '\n',
       );
     }
     ctx.io.writeErr(`${theme.gradient('❯')} `);
@@ -1097,14 +1178,21 @@ export async function runChat(
     promptActive = true;
     if (fullPrompt) drawPrompt();
     else drawBarePrompt();
-    let line: string;
+    let entry: QueuedLine;
     try {
-      line = await nextLine();
+      entry = await nextEntry();
     } catch (err) {
       if (err instanceof PromptClosedError) break; // Ctrl+D / Ctrl+C at prompt
       throw err;
     } finally {
       promptActive = false;
+    }
+    const line = entry.text;
+    if (entry.silent) {
+      // Queued mid-turn, never echoed (the spinner owned the row) — replay the
+      // line now so the transcript shows exactly what is running. The prompt
+      // marker itself is already on the row (drawn before the await).
+      ctx.io.writeErr(`${line}\n`);
     }
     const trimmed = line.trim();
     fullPrompt = trimmed !== '';
@@ -1178,7 +1266,6 @@ export async function runChat(
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
     const md = new MarkdownStream(markdownStyleFor(theme));
-    let stopSpinnerOnDelta = true;
     // v0.9 stability: a renderer fault degrades the turn to raw text with a
     // one-line notice — it can NEVER kill the REPL.
     let mdBroken = false;
@@ -1202,16 +1289,15 @@ export async function runChat(
         return '';
       }
     };
-    if (spinnerAllowed) spinner.start();
     try {
       // v1.2: auto-compaction — when the estimate crosses the threshold, fold
       // the oldest turns into one summary message (cheap model, fails soft).
       // The animated pulse line plays on TTYs; json mode stays silent.
+      // v1.2.1: the pulse owns the row while it runs — the spinner starts
+      // only once the request is actually in flight (they shared a row and
+      // redrew over each other in v1.2).
       const estNow = estimateTokensHistory(history);
       if (!ctx.json && history.length > 0 && estNow >= contextTokens * CRITICAL_RATIO) {
-        if (spinnerAllowed) {
-          ctx.io.writeErr('\r\x1b[2K');
-        }
         const frameSeq = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let fi = 0;
         const pulseTimer = spinnerAllowed
@@ -1247,6 +1333,7 @@ export async function runChat(
           if (spinnerAllowed) ctx.io.writeErr('\r\x1b[2K');
         }
       }
+      if (spinnerAllowed) spinner.start();
       const result = await runAgentLoop({
         client,
         model: current.id,
@@ -1271,10 +1358,12 @@ export async function runChat(
         callbacks: {
           onDelta: (text) => {
             try {
-              if (stopSpinnerOnDelta) {
-                spinner.stop();
-                stopSpinnerOnDelta = false;
-              }
+              // Content ALWAYS owns the row: stop the spinner on EVERY delta,
+              // not just the first — thinking models interleave reasoning
+              // deltas between paragraphs and onReasoning re-arms the spinner
+              // each time, so a one-shot stop let the next redraw glue
+              // `✦ Thinking…` onto the reply text (the v1.2 corruption).
+              arbiter.stopForContent();
               if (mdBroken) {
                 r.writeRaw(`${text}\n`);
                 return;
@@ -1300,8 +1389,7 @@ export async function runChat(
             }
           },
           onToolStart: (name, label) => {
-            if (spinner.running) spinner.stop();
-            stopSpinnerOnDelta = false;
+            arbiter.stopForContent();
             try {
               ctx.io.writeErr(`${renderToolStart(name, label, theme)}\n`);
             } catch {
@@ -1310,10 +1398,11 @@ export async function runChat(
           },
           // Loop activity lines (· outside access granted for this session: …,
           // · denied by user, …) — plain dim stderr rows, same lane as the
-          // tool rows so they read as a transcript of what happened.
+          // tool rows so they read as a transcript of what happened. The
+          // spinner may own the row — yield it, never glue onto it.
           onActivity: (line) => {
             try {
-              ctx.io.writeErr(`${theme.dim(line)}\n`);
+              arbiter.uiLine(theme.dim(line));
             } catch {
               noteHiccup();
             }
@@ -1331,7 +1420,7 @@ export async function runChat(
                 },
                 theme,
               )) {
-                ctx.io.writeErr(`${outLine}\n`);
+                arbiter.uiLine(outLine);
               }
             } catch {
               noteHiccup();
@@ -1339,6 +1428,10 @@ export async function runChat(
             if (spinnerAllowed) spinner.start();
           },
           onTurnComplete: (totals) => {
+            // The stream phase is over — stop the spinner BEFORE the flush and
+            // the footer, so neither can land on its row (a turn that ends on
+            // reasoning deltas would otherwise glue the footer to it).
+            arbiter.stopForContent();
             // The usage chunk closes the turn's stream: flush any buffered
             // partial reply line FIRST so the footer lands BELOW the reply
             // text, never above it (also keeps consecutive tool-loop turns
@@ -1389,7 +1482,7 @@ export async function runChat(
         // Fatal: the key is gone/revoked — exit 1 with the verbatim message.
         r.renderError(err);
         currentAbort = null;
-        unpin();
+        unpin(true);
         router?.detach();
         detachShiftTab();
         rl.close();
@@ -1408,7 +1501,10 @@ export async function runChat(
   }
 
   spinner.stop();
-  unpin();
+  // The pinned banner exits as a closing card: the DECSTBM reset homes the
+  // cursor per spec, so park it below the banner and erase beneath — the
+  // summary prints clean and the shell inherits a tidy screen edge (v1.2.1).
+  unpin(true);
   router?.detach();
   detachShiftTab();
   rl.close();

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.1 — terminal line discipline (the garbled-render fixes)
+
+- **Spinner/reply glue fixed** — thinking models interleave reasoning deltas
+  between reply paragraphs and re-armed the spinner each time, so the old
+  one-shot stop let `✦ Thinking… 2s · ctrl+c to interrupt` print glued onto
+  every paragraph. A new spinner arbiter owns the row: streamed reply text
+  always stops the spinner outright, and UI lines (footers, tool rows, queue
+  notices) erase the spinner's row first and let it redraw below.
+- **Clean exit from the pinned banner** — the DECSTBM region reset homes the
+  cursor per the DEC spec, which printed the exit summary over the banner art
+  and left the shell prompt inside it. A pinned exit is now a closing card:
+  the cursor parks below the banner, the rows beneath are erased, and the
+  summary prints clean.
+- **Mid-turn typing** — keystrokes no longer echo onto the spinner's row, and
+  a line queued mid-turn is replayed as a `❯ …` row when it actually runs, so
+  the transcript always shows what was sent. (A line-based permission ask
+  still echoes its answer.)
+- **Compaction pulse** no longer fights the spinner for the row — the spinner
+  starts once the request is actually in flight.
+
 ## 1.2.0 — context meter + auto-compaction
 
 - **Context meter** — a live `ctx ▰▰▱▱ 62% · 18,500/30,000` line in the prompt

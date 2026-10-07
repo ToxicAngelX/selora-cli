@@ -58,6 +58,9 @@ unchanged.
   terminal's scrollback (the conversation itself is safe — it auto-saves to
   `.selora/sessions/chat.json`, see [History](#history-v06-crash-safe)). Opt out with `SELORA_NO_ANIMATE` (or `mono` /
   NO_COLOR) for the classic inline screen that leaves scrollback intact.
+  On exit the banner stays as a closing card — the session summary prints
+  below it and the shell prompt follows clean (a bare DECSTBM reset homes the
+  cursor per spec, which would overprint the art).
 - **Prompt**: a dim context line (`model · cwd · tokens`), a dim mode line
   (`⏸ manual mode on · ? for shortcuts`), and a gradient `❯` marker. An
   empty Enter reprompts with the bare marker — the status lines print once
@@ -73,7 +76,9 @@ unchanged.
   lists the shortcuts.
 - **Thinking**: reasoning deltas are never printed as text — while the model
   thinks, the spinner shows a shimmering `✦ Thinking…`; the reply streams
-  live as soon as content starts.
+  live as soon as content starts. Streamed text always stops the spinner
+  outright, and UI lines (footers, tool rows, notices) erase its row first
+  and let it redraw below — the two can never glue together on one line.
 - **Replies** stream through the markdown renderer: completed lines render
   live; fenced code blocks render as dim boxed units with a language label
   once they close. Headings, bold, inline code, and bullets are styled.
@@ -125,7 +130,9 @@ unchanged.
 - **Queued prompt cap (v0.9)**: at most ONE line queues while a turn streams
   (`· queued — runs when this turn finishes`); a second is discarded with
   `· one prompt already queued — it runs next` and a dim echo of the dropped
-  line. Aborting the turn (Ctrl+C) clears the queued line too.
+  line. Aborting the turn (Ctrl+C) clears the queued line too. Typing
+  mid-turn never echoes onto the spinner's row — when the queued line runs it
+  is replayed as a `❯ …` row, so the transcript shows exactly what was sent.
 - **Spinner**: `✦ Warping… 12s · 1.4K tokens · ctrl+c to interrupt` while a
   reply streams (galaxy frames + a shimmering gradient word rotating through
   ten phrases, real elapsed time, honest token counts — never under

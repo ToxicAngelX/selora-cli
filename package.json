@@ -1,6 +1,6 @@
 {
   "name": "selora",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Open-source CLI for the Selora API gateway",
   "type": "module",
   "bin": {
@@ -47,6 +47,7 @@
     "@eslint/js": "^9.39.2",
     "@types/node": "^24.7.0",
     "eslint": "^9.39.2",
+    "fast-check": "^4.10.2",
     "globals": "^16.4.0",
     "prettier": "^3.6.2",
     "tsup": "^8.5.0",
@@ -56,6 +57,7 @@
   },
   "dependencies": {
     "commander": "^14.0.2",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "string-width": "^7.2.0"
   }
 }

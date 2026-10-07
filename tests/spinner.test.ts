@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { GALAXY_PALETTE, Theme } from '../src/ui/theme.js';
-import { shimmerText, Spinner } from '../src/ui/spinner.js';
+import { shimmerText, Spinner, SpinnerArbiter } from '../src/ui/spinner.js';
 
 const ESC = String.fromCharCode(27);
 const ANSI_RE = new RegExp(ESC + '\\[[0-9;]*m', 'g');
@@ -108,5 +108,54 @@ describe('Spinner', () => {
     spinner.setFixedWord(undefined);
     expect(writes[writes.length - 1]!).toContain('Orbiting…');
     spinner.stop();
+  });
+});
+
+describe('SpinnerArbiter', () => {
+  function recorder(): { io: { write(s: string): void }; writes: string[] } {
+    const writes: string[] = [];
+    return { writes, io: { write: (s) => writes.push(s) } };
+  }
+
+  it('stopForContent stops a running spinner outright — content owns the row', () => {
+    const { io, writes } = recorder();
+    const spinner = new Spinner(io);
+    const arbiter = new SpinnerArbiter(() => spinner, io.write);
+    spinner.start();
+    arbiter.stopForContent();
+    expect(spinner.running).toBe(false);
+    // the row was erased, and no further redraws happen after it
+    expect(writes[writes.length - 1]).toBe('\r' + ESC + '[2K');
+  });
+
+  it('uiLine yields the row while the spinner runs, writes plain otherwise', () => {
+    const { io, writes } = recorder();
+    const spinner = new Spinner(io);
+    const arbiter = new SpinnerArbiter(() => spinner, io.write);
+    // not running: the plain line, no erase
+    arbiter.uiLine('idle');
+    expect(writes).toEqual(['idle\n']);
+    // running: erase the spinner's row first, then the line — the spinner
+    // keeps running (its next tick redraws on the fresh row below)
+    spinner.start();
+    const before = writes.length;
+    arbiter.uiLine('busy');
+    expect(writes[before]).toBe('\r' + ESC + '[2K');
+    expect(writes[before + 1]).toBe('busy\n');
+    expect(spinner.running).toBe(true);
+    spinner.stop();
+  });
+
+  it('reads the spinner through the getter — a /theme swap never strands it', () => {
+    const { io, writes } = recorder();
+    const old = new Spinner(io);
+    let current = old;
+    const arbiter = new SpinnerArbiter(() => current, io.write);
+    old.start();
+    current = new Spinner(io); // the swap: the new instance was never started
+    arbiter.uiLine('x');
+    // no erase for the swapped-in (not running) spinner — the getter is live
+    expect(writes[writes.length - 1]).toBe('x\n');
+    old.stop();
   });
 });
