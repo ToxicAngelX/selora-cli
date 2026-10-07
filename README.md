@@ -119,6 +119,7 @@ The key is validated against the API **before** anything is stored.
 | `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, aurora, mono)                       | [theme.md](docs/commands/theme.md)           |
 | `selora trust [add\|remove] [<dir>]`  | manage trusted workspaces for the chat trust screen                           | [trust.md](docs/commands/trust.md)           |
 | `selora completion [bash\|zsh\|fish]` | print a shell completion script                                               | [completion.md](docs/commands/completion.md) |
+| `selora update`                       | check npm for a newer selora and install it (`--check` to report only)      | [update.md](docs/commands/update.md)         |
 
 Global flags on every command: `--json` (machine-readable output only),
 `--debug` (request/response details, always redacted), `--api-url <url>`

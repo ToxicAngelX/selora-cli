@@ -25,6 +25,7 @@ import { runRun } from './commands/run.js';
 import { runResume } from './commands/resume.js';
 import { runSessions } from './commands/sessions.js';
 import { runCompletion } from './commands/completion.js';
+import { runUpdate } from './commands/update.js';
 import { THEME_NAMES } from './ui/theme.js';
 
 export function buildProgram(io: CliIo): Command {
@@ -315,6 +316,21 @@ export function buildProgram(io: CliIo): Command {
         typeof shell === 'string' ? shell : undefined,
         program,
       );
+    });
+
+  const updateCmd = program
+    .command('update')
+    .description('check for a newer selora on npm and install it')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .option('--check', 'only report availability — never install')
+    .option('--yes', 'install without prompting')
+    .action(async (_opts: Record<string, unknown>) => {
+      await runUpdate(ctxFor(updateCmd), {
+        check: updateCmd.opts()['check'] === true,
+        yes: updateCmd.opts()['yes'] === true,
+      });
     });
 
   return program;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 — selora update
+
+- **`selora update`** — self-update: reads npm's `latest` dist-tag, compares
+  with the running version, and (with `--yes`) installs through your own npm.
+  `--check` reports only. The default never installs — it prints the exact
+  command, like every other permission-gated action in the CLI.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
