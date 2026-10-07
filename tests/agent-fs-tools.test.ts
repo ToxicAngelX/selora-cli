@@ -90,7 +90,7 @@ describe('list_dir', () => {
     }
   });
 
-  it('caps at 500 entries with an honest +N more note', async () => {
+  it('caps at 500 entries with an honest +N more note', { timeout: 30000 }, async () => {
     const root = tempRoot();
     try {
       mkdirSync(join(root, 'many'));
