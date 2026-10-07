@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { VERSION } from '../src/version.js';
 
 describe('VERSION', () => {
-  it('equals 0.7.0', () => {
-    expect(VERSION).toBe('0.7.0');
+  it('equals 0.8.0', () => {
+    expect(VERSION).toBe('0.8.0');
   });
 });

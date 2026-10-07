@@ -11,6 +11,10 @@
  *                  keystroke away, so it must be impossible to stumble into
  *                  an unattended delete. (--yes on `run` is the explicit,
  *                  stronger commitment and keeps its legacy semantics.)
+ *                  Outside-root paths auto-answer with plain `allow` here;
+ *                  the loop grants the touched directory for the session on
+ *                  ANY approved outside answer (v0.8), so the real run
+ *                  proceeds exactly like the --yes path.
  *
  * The mode is a REPL-layer concept: createModeAsker WRAPS the interactive
  * asker and answers auto-allowable requests itself, delegating everything

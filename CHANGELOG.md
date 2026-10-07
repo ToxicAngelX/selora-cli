@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-07
+
+The workspace trust screen, and the auto-mode outside-access fix. No new
+runtime dependencies (still exactly `commander` + `picocolors`).
+
+### Added
+
+- **Workspace trust screen**: `selora chat` (and `selora resume`) in an
+  untrusted folder now opens with a Claude-Code-style check before the REPL —
+  the folder path, a one-line safety note, and an arrow-key menu (reusing the
+  v0.7 picker engine): `1. Yes, I trust this folder` / `2. No, exit`. Enter
+  trusts and continues; "No" or Esc prints one short line and exits 0.
+  Trusting **persists** (`trusted.json`, mode 0600, in the config dir) — the
+  question is asked once per folder, and paths are stored realpath-canonical
+  so symlinked spellings recognize the same folder. Non-TTY, `--json`,
+  `--yes`, NO_COLOR and TERM=dumb never see the screen (pipelines never
+  block; `--yes` implies trust for the session and persists nothing).
+- **`selora trust [add <dir> | remove <dir>]`**: manage the trusted list by
+  hand — no args lists it, `add`/`remove` resolve the real absolute path
+  first (missing folders get a friendly error). `--json` supported.
+
+### Fixed
+
+- **Auto mode could never touch paths outside the project root** (the Windows
+  bug): the mode asker auto-answers outside-path requests with a plain
+  `allow`, but the loop only granted the directory on `allow-session` — so
+  every approved outside call then failed the real run with "outside the
+  project root and access was not granted". Now ANY approved outside answer
+  (a manual `y` included) grants the touched directory for the session before
+  the real run, first touch printing
+  `· outside access granted for this session: <dir>` — mirroring `--yes`.
+  Deletions (`neverAutoAllow`) still ask every time, in every mode.
+- Packaging: `prepublishOnly` builds before publish (a publish without a
+  build can no longer ship a tarball missing `dist/index.js` — npm used to
+  just warn `bin[selora] script name dist/index.js was invalid and removed`),
+  and `repository` uses the object form (`npm pkg fix`).
+
 ## [0.7.0] - 2026-10-06
 
 The command palette. No new runtime dependencies (still exactly `commander` +

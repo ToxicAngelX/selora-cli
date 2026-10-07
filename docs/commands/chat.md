@@ -18,6 +18,7 @@ glm-5.3-flash · ~/project
 │   create /Users/ada/Desktop/Projects — recursive
 └─ Allow? [y]es / [n]o / [a]lways this session
 y
+  · outside access granted for this session: /Users/ada/Desktop
   ⎿ created /Users/ada/Desktop/Projects
 Done — the folder is on your desktop.
   Tokens: 6,055 · Cost: $0.018
@@ -25,6 +26,17 @@ Done — the folder is on your desktop.
 · Session: 1m 12s · 1 request · 6,055 tokens · $0.018 · 1 file change
 ✓ Session ended
 ```
+
+## Workspace trust (v0.8)
+
+The first time chat starts in a folder that is not yet trusted, a one-time
+safety check runs before the banner and the REPL (see
+[trust.md](trust.md) for the screen and the `selora trust` command). Trusting
+persists (`trusted.json`, mode 0600, in the config dir) — asked once per
+folder. Non-TTY stdin, `--json`, `--yes`, NO_COLOR and TERM=dumb skip it
+entirely; `--yes` implies trust for the session without persisting anything.
+Trust skips the question only — every per-tool permission gate below is
+unchanged.
 
 ## The UI (v0.5)
 

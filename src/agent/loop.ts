@@ -389,10 +389,18 @@ async function executeToolCall(
   if (dry.diff !== undefined) styledDiff = opts.renderDiff?.(dry.diff.before, dry.diff.after);
 
   // OUTSIDE the project root and not granted this session: a dedicated
-  // permission ask showing the absolute path. 'a' grants exactly one
-  // DIRECTORY (the target's parent — or itself when it is an existing dir).
-  // For tools that must always ask (remove), the grant covers the PATH only;
-  // the normal tool prompt still follows.
+  // permission ask showing the absolute path. EVERY approved answer grants
+  // exactly one DIRECTORY (the target's parent — or itself when it is an
+  // existing dir) for the session BEFORE the real run: a manual 'y', an 'a',
+  // and auto mode's auto-allow alike. (v0.7 granted only on 'allow-session' —
+  // a plain 'allow' reached runApproved with outsideDirs unchanged and the
+  // real run failed the boundary check. An approved call that then fails is
+  // the bug class; auto mode hit it on every outside touch.) This branch is
+  // only reached for not-yet-granted dirs — a granted dir never sets
+  // dry.outside — so the grant line prints exactly once per directory: the
+  // FIRST outside touch auto-grants in auto mode, mirroring --yes. For tools
+  // that must always ask (remove), the grant covers the PATH only; the normal
+  // tool prompt still follows.
   if (dry.outside !== undefined) {
     const grantDir = grantDirFor(dry.outside.abs);
     const req: PermissionRequest = {
@@ -403,13 +411,13 @@ async function executeToolCall(
       diff: styledDiff,
     };
     const answer = await ask(permissions, req);
-    if (answer.decision === 'deny') {
+    // Only explicit approvals proceed — a stray 'edit' answer (the line-based
+    // prompt maps 'e' even though outside asks never offer it) denies safely.
+    if (answer.decision !== 'allow' && answer.decision !== 'allow-session') {
       return denied(tool, label, answer.reason, cb, reply, toolEvents);
     }
-    if (answer.decision === 'allow-session') {
-      allows.rememberDir(grantDir);
-      cb.onActivity?.(`· outside access granted for this session: ${grantDir}`);
-    }
+    allows.rememberDir(grantDir);
+    cb.onActivity?.(`· outside access granted for this session: ${grantDir}`);
     const dirs = allows.outsideDirs();
     if (tool.neverAutoAllow === true) {
       // The tool itself still requires its own confirmation every time.

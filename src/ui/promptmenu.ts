@@ -898,6 +898,12 @@ export interface PickerIo {
   pauseInput: () => void;
   resumeInput: () => void;
   theme: Theme;
+  /**
+   * v0.8: optional dim footer below the rows (may be multi-line — a leading
+   * empty line draws a blank separator row). Counted in the redraw math, so
+   * it can never ghost.
+   */
+  footer?: string | undefined;
 }
 
 /**
@@ -915,6 +921,8 @@ export function pickFromList(
   const theme = io.theme;
   const stdin = io.stdin as RawStream;
   const count = items.length;
+  const footerLines = io.footer !== undefined && io.footer !== '' ? io.footer.split('\n') : [];
+  const rowCount = count + footerLines.length;
   let selected = Math.min(Math.max(0, initial), count - 1);
 
   io.pauseInput();
@@ -937,10 +945,12 @@ export function pickFromList(
           : `  ${item.label}${theme.dim(hint)}`;
       });
       if (drawn) {
-        io.write(`\x1b[${count}A`);
+        io.write(`\x1b[${rowCount}A`);
         for (const line of lines) io.write(`\x1b[2K\r${line}\n`);
+        for (const line of footerLines) io.write(`\x1b[2K\r${theme.dim(line)}\n`);
       } else {
         for (const line of lines) io.write(`${line}\n`);
+        for (const line of footerLines) io.write(`${theme.dim(line)}\n`);
         drawn = true;
       }
     };

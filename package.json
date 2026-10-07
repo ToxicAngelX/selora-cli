@@ -1,6 +1,6 @@
 {
   "name": "selora",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Open-source CLI for the Selora API gateway",
   "type": "module",
   "bin": {
@@ -27,7 +27,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "selora",
@@ -37,7 +38,10 @@
     "ai-gateway"
   ],
   "license": "MIT",
-  "repository": "https://github.com/ToxicAngelX/selora-cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ToxicAngelX/selora-cli.git"
+  },
   "author": "Toxic <toxic@selora.lol>",
   "devDependencies": {
     "@eslint/js": "^9.39.2",

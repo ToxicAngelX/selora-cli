@@ -19,6 +19,7 @@ import { runModel } from './commands/model.js';
 import { runKeys } from './commands/keys.js';
 import { runChat } from './commands/chat.js';
 import { runTheme } from './commands/theme.js';
+import { runTrust } from './commands/trust.js';
 import { runInit } from './commands/init.js';
 import { runRun } from './commands/run.js';
 import { runResume } from './commands/resume.js';
@@ -203,6 +204,19 @@ export function buildProgram(io: CliIo): Command {
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')
     .action(async (name: unknown, _opts: Record<string, unknown>) => {
       await runTheme(ctxFor(themeCmd), { name: typeof name === 'string' ? name : undefined });
+    });
+
+  const trustCmd = program
+    .command('trust [action] [dir]')
+    .description('manage trusted workspaces (list, add, remove; default: list)')
+    .option('--debug', 'show request/response details (always redacted)')
+    .option('--json', 'print machine-readable JSON only')
+    .option('--api-url <url>', 'Selora gateway base URL for this invocation')
+    .action(async (action: unknown, dir: unknown, _opts: Record<string, unknown>) => {
+      await runTrust(ctxFor(trustCmd), {
+        action: typeof action === 'string' ? action : undefined,
+        dir: typeof dir === 'string' ? dir : undefined,
+      });
     });
 
   const initCmd = program

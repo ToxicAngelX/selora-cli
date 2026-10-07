@@ -21,8 +21,11 @@
  * (an in-memory map + directory grants held by the running agent loop).
  * Auto-allows are never written to disk, never persist across processes, and
  * for write/exec tools cover exactly the same label — except tools flagged
- * neverAutoAllow (remove): every call asks, always. Outside-root 'a' answers
- * grant exactly one DIRECTORY (the target's parent, or itself when a dir).
+ * neverAutoAllow (remove): every call asks, always. Outside-root answers
+ * grant exactly one DIRECTORY (the target's parent, or itself when a dir) —
+ * since v0.8 on EVERY approved outside answer ('y', 'a', or auto mode's
+ * auto-allow): an approved call must reach the real run with its dir granted,
+ * or the boundary check fails it anyway (the v0.7 auto-mode bug).
  *
  * Denial is never an error — it is fed back to the model ("Permission denied
  * by user." + the optional reason) and the conversation continues.
@@ -431,7 +434,8 @@ export function createDenyingAsker(): PermissionAsker {
  * loop's memory only. Read tools key by tool name (any read is allowed);
  * write/exec key by tool name + label, so "always" for one write never
  * silently approves a different one. v0.3 also remembers OUTSIDE-ROOT
- * directory grants — `a` on an outside path grants exactly that directory.
+ * directory grants — an approved outside answer grants exactly that directory
+ * (since v0.8: any approval, not just 'a').
  */
 export class SessionAllows {
   private readonly allowed = new Set<string>();

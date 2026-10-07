@@ -91,10 +91,18 @@ A path that resolves OUTSIDE the project root is not a hard refusal anymore
 └─ Allow? [y]es / [n]o / [a]lways this session
 ```
 
-- `y` allows exactly this one operation.
-- `a` grants exactly **one directory** — the target's parent (or the target
-  itself when it is an existing directory) — for the session. Access to
-  anything outside that directory still prompts.
+- `y` allows the operation — and grants exactly **one directory** (the
+  target's parent, or the target itself when it is an existing directory) for
+  the session, so the approved call actually runs. (Before v0.8 a plain `y`
+  approved the prompt but left the directory ungranted, so the real run
+  failed the boundary check — the bug that made auto mode useless on outside
+  paths.)
+- `a` grants the same directory AND auto-allows matching future calls (reads
+  by tool, writes/exec by exact label). Access to anything outside that
+  directory still prompts.
+- Auto permission mode auto-answers this prompt: the first outside touch of a
+  directory grants it for the session and prints
+  `· outside access granted for this session: <dir>` — exactly like `--yes`.
 - `--yes` implies the grant (in memory) for everything the toolset allows.
 - Symlinks are always resolved first, so the prompt shows the real
   destination and a link cannot smuggle a path past a grant.
@@ -254,20 +262,18 @@ $ selora chat
 │   create /Users/ada/Desktop/Projects — recursive
 └─ Allow? [y]es / [n]o / [a]lways this session
   ❯ Yes
+  · outside access granted for this session: /Users/ada/Desktop
   ⎿ created /Users/ada/Desktop/Projects
 Done — the `Projects` folder is on your desktop.
 
 ❯ make a file notes.md inside it with a short intro
 ● Write(desktop/Projects/notes.md)
 ┌─ write_file(desktop/Projects/notes.md)
-│   outside the project root:
-│   /Users/ada/Desktop/Projects/notes.md
 │   write /Users/ada/Desktop/Projects/notes.md — full content:
 │   # Project notes
 │   ...
 └─ Allow? [y]es / [n]o / [a]lways this session
   ❯ Yes, always this session
-  · outside access granted for this session: /Users/ada/Desktop/Projects
   ⎿ wrote /Users/ada/Desktop/Projects/notes.md (128 B)
 
 ❯ read it back to me
@@ -290,8 +296,6 @@ Done — the `Projects` folder is on your desktop.
 ❯ remove the folder now
 ● Remove(desktop/Projects)
 ┌─ remove(desktop/Projects)
-│   outside the project root:
-│   /Users/ada/Desktop/Projects
 │   remove /Users/ada/Desktop/Projects — 2 items · 2.1 KB
 │   moves to trash (~/.Trash)
 └─ Allow? [y]es / [n]o
@@ -324,7 +328,8 @@ your terminal renders the theme's colors; here it is shown as plain text.)
 
 - **No auto-allow persistence.** "Always" answers and outside-root directory
   grants are session-scoped memory only; nothing permission-related is ever
-  written to disk.
+  written to disk. (The v0.8 trusted-workspace list is not a permission grant
+  — it only skips the chat startup question.)
 - **No network git** (push/pull/fetch/remote) — not behind a flag.
 - **No web tools by default** — they are opt-in and name their hosts.
 - **No prompt telemetry.** Nothing about your prompts, replies, or files is

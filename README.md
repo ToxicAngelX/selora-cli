@@ -103,6 +103,7 @@ The key is validated against the API **before** anything is stored.
 | `selora sessions [list\|show\|rm]`    | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
 | `selora init`                         | write a project-local selora.json (model + agent context globs)               | [init.md](docs/commands/init.md)             |
 | `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, aurora, mono)                       | [theme.md](docs/commands/theme.md)           |
+| `selora trust [add\|remove] [<dir>]`  | manage trusted workspaces for the chat trust screen                           | [trust.md](docs/commands/trust.md)           |
 | `selora completion [bash\|zsh\|fish]` | print a shell completion script                                               | [completion.md](docs/commands/completion.md) |
 
 Global flags on every command: `--json` (machine-readable output only),
@@ -157,6 +158,36 @@ selora model gpt-5.2-mini     # sets the stored default (verified against /v1/mo
 
 Per-invocation: `selora chat --model <id>`, `selora run --model <id>`, or a
 project `selora.json` (see below) for `run`.
+
+## Trusted workspaces
+
+The first time you run `selora chat` in a folder, a quick safety check asks
+whether you trust it — the agent can read, edit, and run commands there:
+
+```
+Accessing workspace:
+
+ ~/project
+
+ Quick safety check: is this a folder you created or one you trust? Selora will be able to
+ read, edit, and run commands here.
+
+❯ 1. Yes, I trust this folder
+  2. No, exit
+
+Enter to confirm · Esc to cancel
+```
+
+- **Asked once per folder.** Trusting persists to `trusted.json` (mode 0600)
+  next to `config.json` in the config dir; paths are stored realpath-canonical,
+  so `~/proj` and a symlinked spelling of it are the same folder.
+- **Pipelines never block.** Non-TTY stdin, `--json`, `--yes`, NO_COLOR and
+  TERM=dumb skip the screen entirely (`--yes` implies trust for the session
+  and persists nothing).
+- Manage the list by hand: `selora trust` (list), `selora trust add <dir>`,
+  `selora trust remove <dir>`.
+- Trust only skips the one-time question — the per-tool permission gates
+  (prompts, modes, outside-root session grants) are unchanged.
 
 ## Privacy
 

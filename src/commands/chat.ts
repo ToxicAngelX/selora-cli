@@ -2,6 +2,18 @@
  * `selora chat [--model <id>] [--safe] [--yes]` — the interactive agent REPL
  * (v0.7: slash-command menu + @path completion at the prompt).
  *
+ * What changed in v0.8 (docs/commands/chat.md):
+ *  - the workspace trust screen runs BEFORE the banner: an untrusted cwd on
+ *    an interactive, menu-capable terminal gets the Claude-Code-style
+ *    arrow-key check ("Yes, I trust this folder" / "No, exit"). Trusting
+ *    persists to trusted.json (0600) in the config dir — asked once per
+ *    folder. Non-TTY, --json, --yes, NO_COLOR and TERM=dumb never see it
+ *    (`selora trust add <dir>` pre-trusts for scripts and first runs);
+ *  - fixed: in auto mode (and on a manual 'y') an approved OUTSIDE-root tool
+ *    call now grants the touched directory for the session before the real
+ *    run — v0.7 granted only on 'allow-session', so auto mode failed every
+ *    outside path with "outside the project root and access was not granted".
+ *
  * What changed in v0.7 (docs/commands/chat.md):
  *  - typing `/` opens an inline menu under the prompt: the slash commands with
  *    their descriptions, ↑/↓ to move, Tab/Enter to run, Esc to dismiss — the
@@ -108,6 +120,8 @@ import {
   slashHelpLine,
   type SlashCommand,
 } from '../ui/promptmenu.js';
+import { isTrustedDir } from '../config/trust.js';
+import { runTrustScreen, trustScreenCapable } from '../ui/trustscreen.js';
 
 export interface ChatFlags {
   model?: string | undefined;
@@ -254,6 +268,33 @@ export async function runChat(
   let themeName: ThemeName =
     configuredTheme !== undefined && isThemeName(configuredTheme) ? configuredTheme : 'galaxy';
   let theme = themeFor(themeName, process.stdout.isTTY === true);
+
+  // ------------------------------------------------------------------
+  // Workspace trust (v0.8) — the Claude-Code-style one-time folder check.
+  // An untrusted cwd on an interactive, menu-capable terminal gets the
+  // arrow-key trust screen BEFORE the banner and the REPL; trusting persists
+  // (config-dir trusted.json, 0600), so the question is asked once per
+  // folder. Non-TTY, --json, --yes, NO_COLOR and TERM=dumb never see it —
+  // pipelines must not block, and --yes is already the stronger commitment
+  // (it implies trust for the session and persists nothing).
+  // ------------------------------------------------------------------
+  if (
+    trustScreenCapable({
+      isTTY: ctx.io.isTTY,
+      json: ctx.json,
+      yes: flags.yes === true,
+      stdinRawCapable: rawCapable(ctx.io.stdin),
+      env: process.env,
+    }) &&
+    !isTrustedDir(cwd)
+  ) {
+    const trusted = await runTrustScreen({
+      cwd,
+      theme,
+      io: { stdin: ctx.io.stdin, write: (s) => ctx.io.writeErr(s) },
+    });
+    if (!trusted) return; // "· not trusted — exiting" printed; exit 0
+  }
 
   // ------------------------------------------------------------------
   // The pinned ambient banner (v0.5). On a color-capable TTY with enough
