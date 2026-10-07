@@ -1,10 +1,13 @@
 /**
- * Permission-mode tests (v0.5): the cycle order, the status lines, and the
- * mode asker's auto-allow matrix — manual delegates everything; acceptEdits
- * auto-allows reads/writes inside the project but never exec, outside-root,
- * or neverAutoAllow (remove); auto allows everything EXCEPT neverAutoAllow.
- * The wrap is re-evaluated per request, so a mid-session mode change takes
- * effect on the very next call.
+ * Permission-mode tests (v0.5; v0.9 added plan): the cycle order, the status
+ * lines, and the mode asker's auto-allow matrix — manual delegates
+ * everything; acceptEdits auto-allows reads/writes inside the project but
+ * never exec, outside-root, or neverAutoAllow (remove); auto allows
+ * everything EXCEPT neverAutoAllow; plan auto-allows in-project reads only
+ * (mutations are denied by the LOOP's planGate, not the asker — a plan mode
+ * without a gate degrades to "reads run, mutations ask"). The wrap is
+ * re-evaluated per request, so a mid-session mode change takes effect on the
+ * very next call.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,6 +18,7 @@ import {
   modeAutoAllows,
   modeStatusLine,
   nextMode,
+  PLAN_MODE_DENY_REASON,
   type PermissionMode,
 } from '../src/agent/modes.js';
 
@@ -55,13 +59,15 @@ function recordingBase(decision: 'allow' | 'deny' = 'deny'): {
 }
 
 describe('mode cycle and status lines', () => {
-  it('cycles manual → acceptEdits → auto → manual', () => {
-    expect(MODE_CYCLE).toEqual(['manual', 'acceptEdits', 'auto']);
+  it('cycles manual → acceptEdits → auto → plan → manual (v0.9: plan joined)', () => {
+    expect(MODE_CYCLE).toEqual(['manual', 'acceptEdits', 'auto', 'plan']);
     let mode: PermissionMode = 'manual';
     mode = nextMode(mode);
     expect(mode).toBe('acceptEdits');
     mode = nextMode(mode);
     expect(mode).toBe('auto');
+    mode = nextMode(mode);
+    expect(mode).toBe('plan');
     mode = nextMode(mode);
     expect(mode).toBe('manual');
   });
@@ -70,7 +76,14 @@ describe('mode cycle and status lines', () => {
     expect(modeStatusLine('manual')).toBe('⏸ manual mode on · ? for shortcuts');
     expect(modeStatusLine('acceptEdits')).toBe('⏵⏵ accept edits on · ? for shortcuts');
     expect(modeStatusLine('auto')).toBe('⏵⏵ auto mode on · ? for shortcuts');
+    expect(modeStatusLine('plan')).toBe('◈ plan mode on · ? for shortcuts');
     expect(modeStatusLine('safe')).toBe('⏸ safe mode on (read-only tools) · ? for shortcuts');
+  });
+
+  it('the plan-mode denial reason is the exact spec text', () => {
+    expect(PLAN_MODE_DENY_REASON).toBe(
+      'plan mode: proposal recorded — switch modes (shift+tab) to execute',
+    );
   });
 });
 
@@ -95,6 +108,17 @@ describe('modeAutoAllows', () => {
     expect(modeAutoAllows('auto', EXEC_REQ)).toBe(true);
     expect(modeAutoAllows('auto', OUTSIDE_WRITE_REQ)).toBe(true);
     expect(modeAutoAllows('auto', REMOVE_REQ)).toBe(false);
+  });
+
+  it('plan: in-project reads run; everything else is delegated (the loop gate denies it)', () => {
+    expect(modeAutoAllows('plan', READ_REQ)).toBe(true);
+    expect(modeAutoAllows('plan', WRITE_REQ)).toBe(false);
+    expect(modeAutoAllows('plan', EXEC_REQ)).toBe(false);
+    // outside reads still ask (the trust boundary is not plan's to relax)
+    expect(
+      modeAutoAllows('plan', { label: 'read_file(../x)', kind: 'read', outsidePath: '/x' }),
+    ).toBe(false);
+    expect(modeAutoAllows('plan', REMOVE_REQ)).toBe(false);
   });
 });
 
@@ -135,6 +159,17 @@ describe('createModeAsker', () => {
       replacement: async () => null,
     };
     expect(createModeAsker(base, () => 'auto').askDetailed).toBeUndefined();
+  });
+
+  it('plan mode: reads never reach the base asker; writes delegate (and would be gated by the loop)', async () => {
+    const { base, asked } = recordingBase('deny');
+    const asker = createModeAsker(base, () => 'plan');
+    expect(await asker.ask(READ_REQ)).toBe('allow');
+    expect(await asker.askDetailed!(READ_REQ)).toEqual({ decision: 'allow' });
+    // a mutation delegates to the human asker when no loop gate is attached —
+    // asking is always the safe degradation
+    expect(await asker.ask(WRITE_REQ)).toBe('deny');
+    expect(asked).toEqual([WRITE_REQ]);
   });
 
   it('the replacement (edit-command) flow always delegates', async () => {

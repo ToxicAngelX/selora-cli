@@ -15,6 +15,9 @@
  *    and the first execution of an approved call is always the dry run.
  *  - A denied tool is not an error: "Permission denied by user" goes back to
  *    the model as the tool result and the conversation continues.
+ *  - Plan mode (v0.9, the planGate option): a mutating tool is denied BEFORE
+ *    its dry run and recorded as a proposal instead — the conversation
+ *    continues with read-only tools only.
  *  - A failed tool feeds its error text back to the model (it may retry
  *    differently); 3 CONSECUTIVE failures abort the run honestly.
  *  - Usage/charge are summed across turns with the existing BigInt money
@@ -32,6 +35,7 @@ import {
 import { parseMoneyMicro, microToWireString } from '../money.js';
 import type { Tool, ToolKind } from './tool.js';
 import { grantDirFor } from './userPaths.js';
+import { PLAN_MODE_DENY_REASON } from './modes.js';
 import {
   createAutoAsker,
   SessionAllows,
@@ -97,6 +101,18 @@ export interface AgentLoopCallbacks {
   onHistorySnapshot?: ((messages: ChatMessage[]) => void) | undefined;
 }
 
+/**
+ * Plan mode (v0.9): when `isPlanMode()` is true, every MUTATING tool call
+ * (kind !== 'read') is denied before any dry run — the label is recorded via
+ * `onProposal` (chat's /plan list) and the model receives a reasoned denial.
+ * Read/search tools never reach the gate (the mode asker auto-allows them).
+ * Absent → nothing is gated (the `run` command never sets this).
+ */
+export interface PlanGate {
+  isPlanMode: () => boolean;
+  onProposal: (label: string) => void;
+}
+
 export interface AgentLoopOptions {
   client: SeloraClient;
   model: string;
@@ -124,6 +140,8 @@ export interface AgentLoopOptions {
    * (the v0.2 `run` behavior — nothing survives the process either way).
    */
   allows?: SessionAllows | undefined;
+  /** v0.9: plan mode — mutating tool calls become recorded proposals. */
+  planGate?: PlanGate | undefined;
 }
 
 export interface AgentToolEvent {
@@ -357,6 +375,21 @@ async function executeToolCall(
   const label = tool.permissionLabel(input);
   cb.onActivity?.(`→ ${label}`);
   cb.onToolStart?.(tool.name, label);
+
+  // Plan mode (v0.9): a mutating tool is NEVER executed — not even dry-run
+  // here. The proposal is recorded (chat's /plan list, shown to the user) and
+  // the model receives the standard reasoned denial, so the run continues as
+  // a planning conversation. Read tools never reach this branch (the mode
+  // asker auto-allowed them); 'denied' does not touch the failure breaker.
+  if (opts.planGate !== undefined && opts.planGate.isPlanMode() && tool.kind !== 'read') {
+    opts.planGate.onProposal(label);
+    const summary = 'plan mode: proposal recorded — not executed';
+    cb.onActivity?.(`· ${summary}`);
+    cb.onToolResult?.({ name: tool.name, label, kind: tool.kind, ok: false, summary });
+    reply(`Permission denied by user. Reason: ${PLAN_MODE_DENY_REASON}`);
+    toolEvents.push({ name: tool.name, label, ok: false, summary });
+    return 'denied';
+  }
 
   // Session auto-allow from an earlier 'a' answer (memory-only). Tools that
   // must always ask (remove) are exempt even in always-allow mode.

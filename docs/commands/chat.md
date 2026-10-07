@@ -65,7 +65,9 @@ unchanged.
 - **Permission modes**: shift+tab at the prompt cycles `manual` (every tool
   call asks) → `acceptEdits` (reads and project file edits run without
   asking; shell commands and outside-root access still ask) → `auto` (every
-  tool runs — except deletions, which always ask, in every mode). `--safe`
+  tool runs — except deletions, which always ask, in every mode) → `plan`
+  (v0.9: reads run; every mutating call is denied and recorded as a proposal
+  instead — see [Plan mode](#plan-mode-v09)). `--safe`
   pins a read-only `safe` display mode (write/exec tools don't exist, so
   there is nothing to cycle); `--yes` starts in `auto`. `?` at the prompt
   lists the shortcuts.
@@ -106,6 +108,24 @@ unchanged.
 - All of the v0.7 menu machinery is **TTY-only**: piped stdin, `--json`,
   NO_COLOR, and TERM=dumb never open a menu — typing full commands behaves
   exactly as it always has.
+- **History search (v0.9)**: `Ctrl+R` at the prompt opens a search over this
+  session's sent prompts plus every persisted session of the project (the
+  same store `selora resume` reads) — newest first, deduped, filtered as you
+  type (case-insensitive substring), `↑`/`↓` to move. `Enter` **inserts** the
+  pick at the prompt (never sends), `Esc` cancels and restores the line you
+  were typing. Same TTY-only gates as the menu; with no history the key is
+  inert.
+- **`!` shell escape (v0.9)**: `! <cmd>` runs the command in the project root
+  without leaving chat — output folds to a dim block (last 40 lines +
+  `… N more lines`), the exit code prints (non-zero highlighted), and nothing
+  is ever sent to the model. No permission gate: you typed it — same trust as
+  your own terminal. While a turn streams a `!` line is refused with a
+  one-line notice (never queued); `\!` escapes a literal leading `!`;
+  Ctrl+C while a `!` command runs kills the command, not the session.
+- **Queued prompt cap (v0.9)**: at most ONE line queues while a turn streams
+  (`· queued — runs when this turn finishes`); a second is discarded with
+  `· one prompt already queued — it runs next` and a dim echo of the dropped
+  line. Aborting the turn (Ctrl+C) clears the queued line too.
 - **Spinner**: `✦ Warping… 12s · 1.4K tokens · ctrl+c to interrupt` while a
   reply streams (galaxy frames + a shimmering gradient word rotating through
   ten phrases, real elapsed time, honest token counts — never under
@@ -188,12 +208,31 @@ type the command:
 | `/clear`        | clear the conversation history                                                |
 | `/tools`        | list the tools available this session (and the permission mode)               |
 | `/permissions`  | show what is auto-allowed this session (memory-only state)                    |
+| `/plan`         | show the plan-mode proposal list (numbered, newest last)                      |
+| `/plan clear`   | empty the proposal list                                                       |
 | `/cost`         | session totals: requests, tokens, cost                                        |
 | `/exit`         | end the session (Ctrl+D at the prompt also works)                             |
 
 Empty lines re-prompt with the bare `❯` marker (the status lines print once
 per real turn). `?` at the prompt lists the keyboard shortcuts. Unknown slash
 commands print a hint.
+
+## Plan mode (v0.9)
+
+The fourth permission mode (`◈ plan mode on · ? for shortcuts`): the agent
+explores freely — read/search/web tools run without asking — but **nothing
+mutating executes**. Every write/edit/exec/remove call the model attempts is
+denied before even its dry run, recorded as a numbered proposal, and the
+model is told `plan mode: proposal recorded — switch modes (shift+tab) to
+execute` so the conversation continues as a planning session.
+
+- `/plan` prints the proposals (numbered, newest last); `/plan clear` empties
+  the list. The list survives mode switches — plan, review, then shift+tab to
+  `acceptEdits` or `auto` and re-ask to execute.
+- Plan denials are not failures: the 3-consecutive-failure circuit breaker
+  never counts them, and the run never stops early because of a proposal.
+- Deletions keep their always-ask behavior in every mode; plan mode simply
+  never gets that far (the proposal is recorded instead).
 
 ## Per-reply footer
 
@@ -204,11 +243,14 @@ Sub-dime costs keep 3 decimals. No usage chunk → no footer.
 ## Ctrl+C behavior
 
 - **During a stream**: aborts the in-flight request, prints
-  `· Request cancelled — session kept`, and returns to the prompt. The
-  aborted turn is dropped from the history entirely (retry starts clean).
-- **At the prompt** (no stream in flight): exits the session cleanly. If a
-  command/path menu is open, Ctrl+C only closes the menu (same as Esc) — the
-  next Ctrl+C exits.
+  `· Request cancelled — session kept`, drops the queued prompt (v0.9), and
+  returns to the prompt. The aborted turn is dropped from the history
+  entirely (retry starts clean) and never reaches the session file.
+- **During a `!` command** (v0.9): kills the command (SIGINT, SIGKILL if it
+  lingers) and returns to the prompt.
+- **At the prompt** (nothing in flight): exits the session cleanly. If a
+  menu/search is open, Ctrl+C only closes it (same as Esc) — the next Ctrl+C
+  exits.
 
 Failed turns (429 / 402 / network / in-band stream errors) are likewise
 dropped from history; the error is rendered (`✗ <backend message verbatim>`)

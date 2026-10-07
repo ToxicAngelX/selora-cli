@@ -1,6 +1,6 @@
 /**
  * Permission modes (v0.5) — the chat REPL's answer to Claude Code's mode
- * line. Three modes, cycled with shift+tab at the prompt:
+ * line. Four modes, cycled with shift+tab at the prompt:
  *
  *   manual       — every tool call asks (the classic behavior).
  *   acceptEdits  — reads and file edits run without asking; exec (shell)
@@ -15,6 +15,14 @@
  *                  the loop grants the touched directory for the session on
  *                  ANY approved outside answer (v0.8), so the real run
  *                  proceeds exactly like the --yes path.
+ *   plan (v0.9)  — read/search tools run without asking; every MUTATING
+ *                  tool (kind !== 'read') is never executed: the agent loop
+ *                  denies it with PLAN_MODE_DENY_REASON and records the
+ *                  tool's label in the session's plan list (the `/plan`
+ *                  command shows it). The denial itself lives in the loop
+ *                  (it owns the plan list) — the asker here only auto-allows
+ *                  the reads, so a plan mode without a loop gate degrades to
+ *                  "reads run, mutations ask" (asking is always safe).
  *
  * The mode is a REPL-layer concept: createModeAsker WRAPS the interactive
  * asker and answers auto-allowable requests itself, delegating everything
@@ -27,10 +35,18 @@
 import type { ToolKind } from './tool.js';
 import type { PermissionAnswer, PermissionAsker, PermissionRequest } from './permissions.js';
 
-export type PermissionMode = 'manual' | 'acceptEdits' | 'auto';
+export type PermissionMode = 'manual' | 'acceptEdits' | 'auto' | 'plan';
 
-/** shift+tab cycles in this order, wrapping. */
-export const MODE_CYCLE: readonly PermissionMode[] = ['manual', 'acceptEdits', 'auto'];
+/** shift+tab cycles in this order, wrapping. (v0.9: plan joined the cycle.) */
+export const MODE_CYCLE: readonly PermissionMode[] = ['manual', 'acceptEdits', 'auto', 'plan'];
+
+/**
+ * The exact reason text a plan-mode denial carries back to the model (the
+ * loop builds "Permission denied by user. Reason: <this>" like any other
+ * reasoned denial) — and the chat UI shows the proposal in the plan list.
+ */
+export const PLAN_MODE_DENY_REASON =
+  'plan mode: proposal recorded — switch modes (shift+tab) to execute';
 
 export function nextMode(mode: PermissionMode): PermissionMode {
   const i = MODE_CYCLE.indexOf(mode);
@@ -50,6 +66,8 @@ export function modeStatusLine(mode: PermissionMode | 'safe'): string {
       return '⏵⏵ accept edits on · ? for shortcuts';
     case 'auto':
       return '⏵⏵ auto mode on · ? for shortcuts';
+    case 'plan':
+      return '◈ plan mode on · ? for shortcuts';
     case 'safe':
       return '⏸ safe mode on (read-only tools) · ? for shortcuts';
   }
@@ -58,7 +76,9 @@ export function modeStatusLine(mode: PermissionMode | 'safe'): string {
 /**
  * May this request run WITHOUT asking in the given mode? Deletions
  * (neverAutoAllow) always ask; acceptEdits covers non-exec tools inside the
- * project root only; auto covers everything else.
+ * project root only; auto covers everything else; plan covers in-project
+ * reads only (mutations are denied by the loop before they ever reach an
+ * asker — see the module doc).
  */
 export function modeAutoAllows(mode: PermissionMode, req: PermissionRequest): boolean {
   if (req.neverAlways === true) return false;
@@ -66,6 +86,9 @@ export function modeAutoAllows(mode: PermissionMode, req: PermissionRequest): bo
   if (mode === 'acceptEdits') {
     const kind: ToolKind = req.kind;
     return kind !== 'exec' && req.outsidePath === undefined;
+  }
+  if (mode === 'plan') {
+    return req.kind === 'read' && req.outsidePath === undefined;
   }
   return false;
 }

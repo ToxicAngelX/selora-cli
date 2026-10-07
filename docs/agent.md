@@ -118,6 +118,17 @@ A path that resolves OUTSIDE the project root is not a hard refusal anymore
   is fed back so the model can answer without tools); with `--yes` tools
   execute and the JSON output includes a `tools` array with each event.
 
+### Plan mode (chat, v0.9)
+
+The chat REPL's fourth shift+tab mode. While it is active the loop denies
+every mutating tool call (`kind !== 'read'`) BEFORE even the dry run and
+records the tool's label as a proposal — the model receives the standard
+reasoned denial ("plan mode: proposal recorded — switch modes (shift+tab) to
+execute") and the run continues read-only. Read/search tools never touch the
+gate (the mode asker auto-allows them). Denials are not failures, so the
+circuit breaker never counts them. The proposals live in the chat session
+(`/plan`, `/plan clear`) — memory-only, like the permission memory.
+
 ## The tools
 
 Inside the project root, all filesystem tools keep the v0.2 sandbox: paths

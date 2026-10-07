@@ -2,13 +2,23 @@
  * The prompt menu engine (v0.7) — the Claude-Code-style command palette for
  * the chat REPL, plus the `@<path>` file completion that shares it.
  *
+ * v0.9 added a third menu kind: the Ctrl+R HISTORY search. It is key-driven
+ * (not line-triggered): Ctrl+R stashes the input line (Esc restores it),
+ * the line becomes a case-insensitive substring filter over the prompt pool
+ * the caller provides (session + persisted sessions, newest first, deduped),
+ * and Enter/Tab INSERT the pick at the prompt — never submit it. The pool is
+ * read once at open (no per-keystroke disk I/O). History rows clamp their
+ * LABEL to the width; the insert always carries the full prompt. Also v0.9:
+ * stdin bytes decode through a StringDecoder, so a multibyte character split
+ * across chunks reassembles instead of garbling into U+FFFD.
+ *
  * Two halves, deliberately separate:
  *
  *  1. A PURE core — slash-command filtering (exact → prefix → substring,
  *     case-insensitive), the trigger computation (where in the typed line a
  *     `/`-command or `@`-path is being edited), filesystem listing with
- *     dir-deepening, the menu state machine, and the row renderer. No I/O:
- *     every function is unit-testable without a terminal.
+ *     dir-deepening, the history filter, the menu state machine, and the row
+ *     renderer. No I/O: every function is unit-testable without a terminal.
  *
  *  2. The plumbing — `PromptRouter` owns the REAL stdin byte stream while the
  *     REPL is at the prompt and forwards into a PassThrough that readline
@@ -29,6 +39,7 @@
 import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Interface } from 'node:readline';
+import { StringDecoder } from 'node:string_decoder';
 import type { Theme } from './theme.js';
 import { isImagePath } from '../images.js';
 
@@ -84,7 +95,7 @@ export function filterSlashCommands(
 // menu items
 // ---------------------------------------------------------------------------
 
-export type MenuItemKind = 'command' | 'dir' | 'file' | 'image';
+export type MenuItemKind = 'command' | 'dir' | 'file' | 'image' | 'history';
 
 export interface MenuItem {
   /** Display label ('/model [id]', 'src/', 'shot.png'). */
@@ -257,12 +268,43 @@ export function listPathMenu(
 }
 
 // ---------------------------------------------------------------------------
+// history search (Ctrl+R) — the third menu kind, opened by key not by trigger
+// ---------------------------------------------------------------------------
+
+/** Rows shown at once; the overflow row reports the rest. */
+export const HISTORY_MENU_ROWS = 10;
+
+/**
+ * Case-insensitive substring filter over the newest-first prompt pool. The
+ * pool order is preserved (newest match first); the display is capped and the
+ * caller shows "+N more" for the rest. Items carry the FULL prompt in
+ * `insert` — the label is what gets clamped for width at draw time.
+ */
+export function filterHistoryItems(
+  pool: readonly string[],
+  filter: string,
+  cap: number = HISTORY_MENU_ROWS,
+): PathListing {
+  const f = filter.toLowerCase();
+  const matches = f === '' ? [...pool] : pool.filter((p) => p.toLowerCase().includes(f));
+  return {
+    items: matches
+      .slice(0, cap)
+      .map((p) => ({ label: p, insert: p, kind: 'history' as const })),
+    total: matches.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // the menu state machine
 // ---------------------------------------------------------------------------
 
+/** The line-driven kinds (slash/path) plus the key-driven history search. */
+export type MenuKind = MenuTrigger['kind'] | 'history';
+
 export class MenuModel {
   private openFlag = false;
-  private kind: MenuTrigger['kind'] = 'slash';
+  private kind: MenuKind = 'slash';
   private items: MenuItem[] = [];
   private total = 0;
   private selected = 0;
@@ -273,7 +315,7 @@ export class MenuModel {
     return this.openFlag;
   }
 
-  get menuKind(): MenuTrigger['kind'] {
+  get menuKind(): MenuKind {
     return this.kind;
   }
 
@@ -297,7 +339,7 @@ export class MenuModel {
     return this.openFlag ? this.items[this.selected] : undefined;
   }
 
-  open(kind: MenuTrigger['kind'], items: MenuItem[], total: number, tokenStart: number): void {
+  open(kind: MenuKind, items: MenuItem[], total: number, tokenStart: number): void {
     this.openFlag = true;
     this.kind = kind;
     this.items = items;
@@ -352,41 +394,56 @@ function visibleWidth(s: string): number {
  * path rows style dirs cyan-ish and images bright; the overflow row and the
  * key hint are dim. Every row is clamped to maxWidth VISIBLE columns (the
  * hint is dropped first — ANSI styles are applied after measuring, so escape
- * bytes can never wrap a row).
+ * bytes can never wrap a row). History rows (v0.9) carry free-form prompts:
+ * the LABEL is clamped to the width budget (the insert keeps the full text),
+ * and a dim header + an empty-state row make the search self-describing.
  */
 export function renderMenuRows(model: MenuModel, theme: Theme, maxWidth: number): string[] {
   if (!model.isOpen) return [];
   const rows: string[] = [];
   const items = model.rows;
+  const isHistory = model.menuKind === 'history';
+  if (isHistory) rows.push(theme.dim('  prompt history — type to filter'));
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i]!;
     const isSel = i === model.selection;
     // measure plain, then style — the hint shrinks/drops to fit
     const marker = isSel ? '❯ ' : '  ';
     let hint = item.hint !== undefined && item.hint !== '' ? ` — ${item.hint}` : '';
-    const budget = maxWidth - visibleWidth(marker) - visibleWidth(item.label);
+    let label = item.label;
+    if (isHistory) {
+      const labelBudget = maxWidth - visibleWidth(marker);
+      const points = Array.from(label);
+      if (points.length > labelBudget) {
+        label = `${points.slice(0, Math.max(0, labelBudget - 1)).join('')}…`;
+      }
+    }
+    const budget = maxWidth - visibleWidth(marker) - visibleWidth(label);
     if (hint !== '' && visibleWidth(hint) > budget) {
       hint = budget > 1 ? `${hint.slice(0, Math.max(0, budget - 1))}…` : '';
     }
     const labelStyled =
       item.kind === 'dir'
-        ? theme.cyan(item.label)
+        ? theme.cyan(label)
         : item.kind === 'image'
-          ? theme.star(item.label)
+          ? theme.star(label)
           : isSel
-            ? theme.star(item.label)
-            : item.label;
+            ? theme.star(label)
+            : label;
     const row = isSel
       ? `${theme.cyan('❯')} ${labelStyled}${theme.dim(hint)}`
       : `  ${labelStyled}${theme.dim(hint)}`;
     rows.push(row);
   }
+  if (isHistory && items.length === 0) rows.push(theme.dim('  no matches'));
   const more = model.totalCount - items.length;
   if (more > 0) rows.push(theme.dim(`  +${more} more — keep typing`));
   const keys =
     model.menuKind === 'slash'
       ? '↑/↓ choose · Tab/Enter run · Esc close'
-      : '↑/↓ choose · Tab/Enter complete · Esc close';
+      : model.menuKind === 'history'
+        ? '↑/↓ choose · Enter insert · Esc cancel'
+        : '↑/↓ choose · Tab/Enter complete · Esc close';
   rows.push(theme.dim(`  ${keys}`));
   return rows;
 }
@@ -494,6 +551,11 @@ export interface PromptRouterDeps {
   onShiftTab?: (() => void) | undefined;
   /** The slash-command registry (live — /help, the menu, dispatch share it). */
   slashCommands: () => readonly SlashCommand[];
+  /**
+   * v0.9: the Ctrl+R pool — the newest-first deduped prompt history (read at
+   * search-open time, so it is always fresh). Absent/empty → Ctrl+R is inert.
+   */
+  historyItems?: (() => readonly string[]) | undefined;
   /** Project root for the `@` listing. */
   cwd: string;
   /** Raw stderr write — the menu renders on the UI channel. */
@@ -509,10 +571,11 @@ const NAV_UP = ['\x1b[A', '\x1bOA'];
 const NAV_DOWN = ['\x1b[B', '\x1bOB'];
 const SHIFT_TAB = '\x1b[Z';
 const CTRL_C = '\x03';
+const CTRL_R = '\x12';
 /** Escape sequences the router acts on (longest-first matching at the head). */
 const KNOWN_SEQUENCES = [...NAV_UP, ...NAV_DOWN, SHIFT_TAB];
 /** Bytes that begin a router-relevant keypress (ends an ordinary text run). */
-const SPECIAL_STARTS = new Set(['\x1b', CTRL_C, '\r', '\n', '\t']);
+const SPECIAL_STARTS = new Set(['\x1b', CTRL_C, CTRL_R, '\r', '\n', '\t']);
 /** How long a lone ESC (or a split escape prefix) waits for more bytes. */
 const ESCAPE_HOLD_MS = 50;
 
@@ -544,6 +607,15 @@ export class PromptRouter {
   /** Esc/Ctrl+C closed the menu: stay closed until this line is submitted. */
   private latched = false;
   private detached = false;
+  /**
+   * Split multibyte UTF-8 across chunks reassembles here instead of landing
+   * in the line as U+FFFD pairs (malformed tails are held, never garbled).
+   */
+  private readonly decoder = new StringDecoder('utf8');
+  /** v0.9 Ctrl+R: the pre-search line (restored by Esc), set ⟺ search open. */
+  private historyStash: { line: string; cursor: number } | undefined;
+  /** v0.9 Ctrl+R: the pool captured at open (no per-keystroke disk reads). */
+  private historyPool: readonly string[] = [];
 
   constructor(private readonly deps: PromptRouterDeps) {
     this.renderer = new MenuRenderer(deps.write, () => deps.rl.getCursorPos().cols);
@@ -553,6 +625,10 @@ export class PromptRouter {
     this.deps.stdin.on('data', this.onData);
     this.deps.rl.on('line', this.onLine);
     this.deps.rl.on('close', this.onClose);
+    // The trust screen's picker pauses stdin on cleanup; the router takes
+    // ownership here, so it must also resume it — a paused stream never
+    // delivers 'data' and the REPL appears dead.
+    this.deps.stdin.resume();
   }
 
   detach(): void {
@@ -596,7 +672,7 @@ export class PromptRouter {
       this.clearHold();
       return;
     }
-    this.pending += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    this.pending += typeof chunk === 'string' ? chunk : this.decoder.write(chunk);
     this.drain();
   };
 
@@ -637,6 +713,11 @@ export class PromptRouter {
       if (ch === CTRL_C) {
         this.pending = p.slice(1);
         this.onCtrlC();
+        continue;
+      }
+      if (ch === CTRL_R) {
+        this.pending = p.slice(1);
+        this.onCtrlR();
         continue;
       }
       if (ch === '\r' || ch === '\n') {
@@ -730,10 +811,43 @@ export class PromptRouter {
     this.forward(CTRL_C); // readline emits SIGINT → the REPL's own handler
   }
 
+  /**
+   * Ctrl+R: open the history search (prompt-only, never stacked on another
+   * menu). The current input line is stashed — Esc restores it — and the
+   * input line becomes the search filter until Enter inserts a pick.
+   */
+  private onCtrlR(): void {
+    if (!this.deps.isPromptActive() || this.model.isOpen) return;
+    const pool = this.deps.historyItems?.() ?? [];
+    if (pool.length === 0) return; // nothing to search — the key is inert
+    const rl = rlMutable(this.deps.rl);
+    this.historyStash = { line: rl.line, cursor: rl.cursor };
+    this.historyPool = pool;
+    this.replaceLine('');
+    const listing = filterHistoryItems(pool, '');
+    this.model.open('history', listing.items, listing.total, 0);
+    this.redraw();
+  }
+
+  /** Enter/Tab on the history menu: insert the pick, keep editing. */
+  private insertHistoryPick(): void {
+    const item = this.model.current;
+    this.historyStash = undefined; // consumed — closeMenu must not restore it
+    this.closeMenu();
+    if (item !== undefined) this.replaceLine(item.insert);
+    // No pick (an empty result list): the typed filter stays as the line.
+  }
+
   private onEnter(enter: string): void {
     if (!this.model.isOpen) {
       this.forward(enter);
       return; // the REPL handles the line (empty Enter reprompts bare)
+    }
+    if (this.model.menuKind === 'history') {
+      // History search: Enter INSERTS the pick at the prompt — it is never
+      // submitted from here (the user reviews, then sends it themselves).
+      this.insertHistoryPick();
+      return;
     }
     if (this.model.menuKind === 'slash') {
       const item = this.model.current;
@@ -765,6 +879,10 @@ export class PromptRouter {
       this.forward('\t'); // no completer registered — v0.6 behavior
       return;
     }
+    if (this.model.menuKind === 'history') {
+      this.insertHistoryPick(); // Tab inserts like Enter (never submits)
+      return;
+    }
     if (this.model.menuKind === 'slash') {
       const item = this.model.current;
       this.closeMenu();
@@ -784,6 +902,13 @@ export class PromptRouter {
     const rl = this.deps.rl;
     if (!this.deps.isPromptActive() || this.latched) {
       if (this.model.isOpen) this.closeMenu();
+      return;
+    }
+    if (this.model.isOpen && this.model.menuKind === 'history') {
+      // The input line IS the search filter — refilter, never retrigger.
+      const listing = filterHistoryItems(this.historyPool, rl.line);
+      this.model.update(listing.items, listing.total, 0);
+      this.redraw();
       return;
     }
     const trigger = computeMenuTrigger(rl.line, rl.cursor);
@@ -853,14 +978,26 @@ export class PromptRouter {
 
   private closeMenu(): void {
     if (this.renderer.drawnRows > 0) this.renderer.clear();
+    // Closing a history search without a pick (Esc/Ctrl+C) restores the line
+    // the user had before Ctrl+R — the search never eats a draft.
+    if (this.model.menuKind === 'history' && this.historyStash !== undefined) {
+      const stash = this.historyStash;
+      this.historyStash = undefined;
+      this.restoreLine(stash.line, stash.cursor);
+    }
     this.model.close();
   }
 
-  /** Replace the whole input line and repaint it (readline's own refresh). */
+  /** Replace the input line and repaint it (readline's own refresh). */
   private replaceLine(text: string): void {
+    this.restoreLine(text, text.length);
+  }
+
+  /** Replace the input line at an explicit cursor, then repaint. */
+  private restoreLine(text: string, cursor: number): void {
     const rl = rlMutable(this.deps.rl);
     rl.line = text;
-    rl.cursor = text.length;
+    rl.cursor = Math.max(0, Math.min(cursor, text.length));
     this.deps.rl.prompt(true); // preserveCursor — repaints prompt + line
   }
 
@@ -959,6 +1096,12 @@ export function pickFromList(
       stdin.removeListener('data', onData);
       stdin.removeListener('end', onEnd);
       io.resumeInput();
+      // A raw stdin with no 'data' listeners left stays in flowing mode, and
+      // a flowing tty handle is referenced — node never exits (the trust
+      // screen's "No, exit" path hung exactly here). Pausing returns the
+      // stream to paused mode; the next reader (readline, the router, or
+      // process exit) resumes it. Harmless on non-tty streams.
+      stdin.pause();
     };
 
     const finish = (value: number | null): void => {

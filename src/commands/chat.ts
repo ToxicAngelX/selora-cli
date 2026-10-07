@@ -2,6 +2,29 @@
  * `selora chat [--model <id>] [--safe] [--yes]` — the interactive agent REPL
  * (v0.7: slash-command menu + @path completion at the prompt).
  *
+ * What changed in v0.9 (docs/commands/chat.md):
+ *  - Ctrl+R at the prompt opens a history search over this session's sent
+ *    prompts plus every persisted session of the project (the store
+ *    `selora resume` reads) — newest first, deduped, substring filter;
+ *    Enter INSERTS the pick at the prompt (never sends), Esc restores the
+ *    stashed line. TTY-menu-capable only; inert otherwise.
+ *  - `! <cmd>` runs a one-shot shell command in the project root without
+ *    leaving the session: output renders as a dim folded block (last 40
+ *    lines + "… N more lines"), the exit code is shown (non-zero
+ *    highlighted), and NOTHING is sent to the model. No permission gate —
+ *    the user typed it. Mid-turn a `!` line is refused (never queued);
+ *    `\!` escapes a literal leading bang.
+ *  - plan mode joins the shift+tab cycle (manual → acceptEdits → auto →
+ *    plan): reads run, mutating tool calls are denied by the loop and
+ *    recorded as proposals — `/plan` shows the list, `/plan clear` empties
+ *    it (it survives mode switches).
+ *  - the mid-turn input queue is capped at ONE: the first typed-ahead line
+ *    queues with a notice, a second is discarded with a notice (echoed
+ *    dimly, never sent); Ctrl+C aborting a turn also drops the queued line.
+ *  - stability: a renderer exception can never kill the REPL (the turn
+ *    degrades to raw text with a one-line notice); split multibyte keypress
+ *    input reassembles via a StringDecoder instead of garbling.
+ *
  * What changed in v0.8 (docs/commands/chat.md):
  *  - the workspace trust screen runs BEFORE the banner: an untrusted cwd on
  *    an interactive, menu-capable terminal gets the Claude-Code-style
@@ -91,7 +114,14 @@ import {
   SESSION_VERSION,
   type StoredSession,
 } from '../agent/session/store.js';
+import { collectPromptHistory } from '../agent/session/history.js';
 import { imageMarker, parseImageInput, userMessageContent } from '../images.js';
+import {
+  parseBangLine,
+  renderShellBlock,
+  startShellCommand,
+  type ShellRunResult,
+} from '../shellescape.js';
 import {
   AMBIENT_DRIFT,
   AMBIENT_INTERVAL_MS,
@@ -331,7 +361,7 @@ export async function runChat(
     // and print a fresh STATIC banner inline at the new width (the session
     // continues normally; /exit + restart restores the pinned banner).
     unpin();
-    const w = process.stdout.columns ?? 80;
+    const w = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80);
     for (const line of renderStartupScreen(theme, { width: w })) r.line(line);
   }
 
@@ -361,7 +391,7 @@ export async function runChat(
   }
 
   if (!ctx.json) {
-    const width = process.stdout.columns ?? 80;
+    const width = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80);
     const rows = process.stdout.rows ?? 24;
     const height = bannerHeight(width);
     // Animation gates on the REAL stdout (a captured test io never animates)
@@ -469,6 +499,10 @@ export async function runChat(
     output: echo,
     terminal: ctx.io.isTTY,
   });
+  // The trust screen's picker pauses stdin on cleanup (a flowing raw tty keeps
+  // node alive otherwise). Readline on a paused stream never emits 'line' —
+  // resume it so the first keystroke after trusting lands.
+  (wire ?? ctx.io.stdin).resume();
   // The prompt readline repaints on line edits (a backspace redraws
   // prompt+line — with readline's default '> ' the marker was clobbered).
   // Same string drawPrompt writes, so a refresh is invisible.
@@ -477,6 +511,12 @@ export async function runChat(
   // The router attaches immediately: typed-ahead input during startup (the
   // resume offer, model verification) must reach readline exactly like v0.6's
   // direct wiring. The menu itself only opens while promptActive.
+  // v0.9: `sentPrompts` is this session's contribution to the Ctrl+R pool
+  // (filled as turns start; the router reads the pool live at search-open).
+  const sentPrompts: string[] = [];
+  // v0.9: plan-mode proposals (mutating tool labels the loop denied), shown
+  // by /plan; survives mode switches by living outside the loop.
+  const planProposals: string[] = [];
   let router: PromptRouter | undefined;
   if (wire !== null) {
     router = new PromptRouter({
@@ -486,10 +526,11 @@ export async function runChat(
       isPromptActive: () => promptActive,
       onShiftTab: () => cycleModeRef.fn?.(),
       slashCommands: () => slashCommands,
+      historyItems: () => collectPromptHistory(cwd, sentPrompts),
       cwd,
       write: (s) => ctx.io.writeErr(s),
       theme: () => theme,
-      cols: () => process.stdout.columns ?? 80,
+      cols: () => (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80),
     });
     router.attach();
   }
@@ -498,11 +539,46 @@ export async function runChat(
   const waiters: Array<{ resolve: (line: string) => void; reject: (err: Error) => void }> = [];
   let closed = false;
   let currentAbort: AbortController | null = null;
+  /** Set while a `!` shell command runs (Ctrl+C kills it instead of exiting). */
+  let currentShellKill: (() => void) | null = null;
 
+  /** A turn (model) or a `!` command is running — the prompt is not waiting. */
+  const turnInFlight = (): boolean => currentAbort !== null || currentShellKill !== null;
+  /** A dim UI notice on the UI channel (stderr) — never the reply channel. */
+  const note = (text: string): void => {
+    ctx.io.writeErr(`${theme.dim(text)}\n`);
+  };
+
+  // v0.9: at most ONE line queues behind a running turn. The first typed-ahead
+  // line queues with a notice; a second is DISCARDED with a notice (echoed
+  // dimly so it is visually not lost — never queued, never sent). `!` shell
+  // lines mid-turn are refused outright (instant commands must not run at a
+  // surprising later moment). Empty lines mid-turn drop silently rather than
+  // eat the single slot. Lines arriving with NO turn in flight (startup
+  // typed-ahead, piped bursts) keep the v0.8 behavior: queued in order.
   rl.on('line', (line: string) => {
     const w = waiters.shift();
-    if (w !== undefined) w.resolve(line);
-    else queued.push(line);
+    if (w !== undefined) {
+      w.resolve(line);
+      return;
+    }
+    if (turnInFlight()) {
+      const t = line.trim();
+      if (t === '') return;
+      if (t.startsWith('!') && !t.startsWith('\\!')) {
+        note('· a turn is streaming — ! commands wait for the prompt (not queued)');
+        return;
+      }
+      if (queued.length === 0) {
+        queued.push(line);
+        note('· queued — runs when this turn finishes');
+      } else {
+        note('· one prompt already queued — it runs next');
+        note(`· discarded: ${t.length > 80 ? `${t.slice(0, 79)}…` : t}`);
+      }
+      return;
+    }
+    queued.push(line);
   });
   const closeLines = (): void => {
     closed = true;
@@ -511,9 +587,13 @@ export async function runChat(
     }
   };
   rl.on('close', closeLines);
-  // Ctrl+C: mid-stream → abort the request and keep the session; at the
-  // prompt (no stream in flight) → exit cleanly.
+  // Ctrl+C: mid-`!`-command → kill the command; mid-stream → abort the
+  // request and keep the session; at the prompt (nothing in flight) → exit.
   rl.on('SIGINT', () => {
+    if (currentShellKill !== null) {
+      currentShellKill();
+      return;
+    }
     if (currentAbort !== null) {
       currentAbort.abort();
       return;
@@ -590,10 +670,11 @@ export async function runChat(
     r.bullet(`Resumed session "${sessionName}" — ${resumed.messages.length} messages restored`);
   }
 
-  // The permission mode (v0.5): shift+tab cycles manual → acceptEdits → auto
-  // at the prompt. --safe is a toolset restriction, not a mode — the status
-  // line shows a read-only display mode and cycling is off. --yes starts in
-  // auto (deletions still ask — neverAutoAllow is honored in every mode).
+  // The permission mode (v0.5; v0.9 added plan): shift+tab cycles manual →
+  // acceptEdits → auto → plan at the prompt. --safe is a toolset restriction,
+  // not a mode — the status line shows a read-only display mode and cycling
+  // is off. --yes starts in auto (deletions still ask — neverAutoAllow is
+  // honored in every mode).
   const safeMode = flags.safe === true;
   let mode: PermissionMode = flags.yes === true ? 'auto' : 'manual';
 
@@ -649,7 +730,7 @@ export async function runChat(
     // wrapped (a wrapped input sits more than one row below the mode line;
     // the next full prompt draw shows the new mode instead). DECSC/DECRC
     // save/restore, the universally supported pair.
-    const w = process.stdout.columns ?? 80;
+    const w = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80);
     if (rl.line.length + 2 < w) {
       ctx.io.writeErr(`\x1b7\x1b[1A\r\x1b[2K${theme.dim(modeStatusLine(mode))}\x1b8`);
     }
@@ -812,7 +893,9 @@ export async function runChat(
       description: 'show this list',
       run: () => {
         for (const cmd of slashCommands) r.bullet(slashHelpLine(cmd));
-        r.bullet('shift+tab — cycle the permission mode (manual → accept edits → auto)');
+        r.bullet('shift+tab — cycle the permission mode (manual → accept edits → auto → plan)');
+        r.bullet('Ctrl+R — search past prompts (Enter inserts, does not send)');
+        r.bullet('! <cmd> — run a shell command here (never sent to the model)');
         r.bullet('? — keyboard shortcuts');
       },
     },
@@ -883,6 +966,32 @@ export async function runChat(
       },
     },
     {
+      name: 'plan',
+      argsHint: '[clear]',
+      description: 'show the plan-mode proposal list (or clear it)',
+      run: (args) => {
+        if (args === 'clear') {
+          planProposals.length = 0;
+          r.bullet('Plan cleared.');
+          return;
+        }
+        if (args !== '') {
+          r.bullet('usage: /plan [clear]');
+          return;
+        }
+        if (planProposals.length === 0) {
+          r.bullet('No proposals yet — in plan mode every mutating tool call is recorded here.');
+          return;
+        }
+        r.bullet(
+          `Plan (${planProposals.length} proposal${planProposals.length === 1 ? '' : 's'}, newest last) — switch modes (shift+tab) to execute:`,
+        );
+        planProposals.forEach((label, i) => {
+          r.bullet(`  ${i + 1}. ${label}`);
+        });
+      },
+    },
+    {
       name: 'cost',
       description: 'session totals (requests, tokens, cost)',
       run: () => {
@@ -916,7 +1025,14 @@ export async function runChat(
       r.bullet(`Unknown command ${head} — /help lists commands.`);
       return 'unknown';
     }
-    const outcome = await cmd.run(args);
+    // A command fault must never kill the REPL (v0.9 stability).
+    let outcome: void | 'exit';
+    try {
+      outcome = await cmd.run(args);
+    } catch (err) {
+      r.fail(`/${cmd.name} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 'handled';
+    }
     return outcome === 'exit' ? 'exit' : 'handled';
   };
 
@@ -941,8 +1057,10 @@ export async function runChat(
     if (trimmed === '') continue; // empty line → bare reprompt
     if (trimmed === '?') {
       for (const cmd of [
-        'shift+tab — cycle the permission mode (manual → accept edits → auto)',
+        'shift+tab — cycle the permission mode (manual → accept edits → auto → plan)',
         '? — this list',
+        'Ctrl+R — search past prompts (Enter inserts, does not send)',
+        '! <cmd> — run a shell command here (never sent to the model)',
         'Ctrl+C — stop the streaming reply (at the prompt: exit)',
         'Ctrl+D — exit the session',
         '/help — the slash commands',
@@ -957,10 +1075,36 @@ export async function runChat(
       continue;
     }
 
+    // `!` shell escape (v0.9): run the command here in the project root and
+    // show the folded output + exit code — the command and its output are
+    // NEVER sent to the model and never enter the prompt history. No
+    // permission gate: the user typed it (same trust as their own terminal).
+    // `\!` escapes a literal leading bang (the backslash is consumed).
+    const bang = parseBangLine(trimmed);
+    if (bang.kind === 'shell') {
+      if (bang.command === '') {
+        r.bullet('! runs a shell command here — e.g. ! npm test (never sent to the model)');
+        continue;
+      }
+      const handle = startShellCommand(bang.command, cwd);
+      currentShellKill = handle.kill;
+      let shellResult: ShellRunResult;
+      try {
+        shellResult = await handle.done;
+      } finally {
+        currentShellKill = null;
+      }
+      for (const outLine of renderShellBlock(shellResult, theme)) {
+        ctx.io.writeErr(`${outLine}\n`);
+      }
+      continue;
+    }
+    const messageText = bang.kind === 'escaped' ? bang.text : trimmed;
+
     // Images (v0.6): `@<path>` tokens attach local files as image_url parts.
     // A parse failure (missing file, >4 MB, more than 4) sends NOTHING — the
     // user fixes and retypes; the turn never starts.
-    const parsed = parseImageInput(trimmed, cwd);
+    const parsed = parseImageInput(messageText, cwd);
     if (!parsed.ok) {
       r.fail(parsed.error);
       continue;
@@ -973,11 +1117,37 @@ export async function runChat(
       ctx.io.writeOut(`${theme.dim(imageMarker(img))}\n`);
     }
     history.push({ role: 'user', content: userMessageContent(parsed.text, parsed.images) });
+    // The Ctrl+R pool (v0.9): the RAW line as typed, so a re-inserted prompt
+    // round-trips (@image tokens and the `\!` escape intact).
+    sentPrompts.push(trimmed);
     const controller = new AbortController();
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
     const md = new MarkdownStream(markdownStyleFor(theme));
     let stopSpinnerOnDelta = true;
+    // v0.9 stability: a renderer fault degrades the turn to raw text with a
+    // one-line notice — it can NEVER kill the REPL.
+    let mdBroken = false;
+    let renderWarned = false;
+    const noteHiccup = (): void => {
+      if (renderWarned) return;
+      renderWarned = true;
+      try {
+        r.bullet('render hiccup — continuing with unstyled output');
+      } catch {
+        // the channel itself is down — nothing more to say
+      }
+    };
+    const safeFlush = (): string => {
+      if (mdBroken) return '';
+      try {
+        return md.flush();
+      } catch {
+        mdBroken = true;
+        noteHiccup();
+        return '';
+      }
+    };
     if (spinnerAllowed) spinner.start();
     try {
       const result = await runAgentLoop({
@@ -994,14 +1164,35 @@ export async function runChat(
         allows,
         renderDiff,
         signal: controller.signal,
+        // v0.9: plan mode — mutating tool calls become /plan proposals.
+        planGate: {
+          isPlanMode: () => mode === 'plan',
+          onProposal: (label) => {
+            planProposals.push(label);
+          },
+        },
         callbacks: {
           onDelta: (text) => {
-            if (stopSpinnerOnDelta) {
-              spinner.stop();
-              stopSpinnerOnDelta = false;
+            try {
+              if (stopSpinnerOnDelta) {
+                spinner.stop();
+                stopSpinnerOnDelta = false;
+              }
+              if (mdBroken) {
+                r.writeRaw(`${text}\n`);
+                return;
+              }
+              const rendered = md.push(text);
+              if (rendered !== '') r.writeRaw(`${rendered}\n`); // stdout, live
+            } catch {
+              mdBroken = true;
+              noteHiccup();
+              try {
+                r.writeRaw(`${text}\n`);
+              } catch {
+                // the channel itself is down
+              }
             }
-            const rendered = md.push(text);
-            if (rendered !== '') r.writeRaw(`${rendered}\n`); // stdout, live
           },
           onReasoning: () => {
             // Thinking is NEVER printed — the spinner carries it: a
@@ -1014,21 +1205,39 @@ export async function runChat(
           onToolStart: (name, label) => {
             if (spinner.running) spinner.stop();
             stopSpinnerOnDelta = false;
-            ctx.io.writeErr(`${renderToolStart(name, label, theme)}\n`);
+            try {
+              ctx.io.writeErr(`${renderToolStart(name, label, theme)}\n`);
+            } catch {
+              noteHiccup();
+            }
+          },
+          // Loop activity lines (· outside access granted for this session: …,
+          // · denied by user, …) — plain dim stderr rows, same lane as the
+          // tool rows so they read as a transcript of what happened.
+          onActivity: (line) => {
+            try {
+              ctx.io.writeErr(`${theme.dim(line)}\n`);
+            } catch {
+              noteHiccup();
+            }
           },
           onToolResult: (info) => {
-            for (const outLine of renderToolResult(
-              {
-                name: info.name,
-                label: info.label,
-                ok: info.ok,
-                summary: info.summary,
-                content: info.content,
-                diff: info.diff,
-              },
-              theme,
-            )) {
-              ctx.io.writeErr(`${outLine}\n`);
+            try {
+              for (const outLine of renderToolResult(
+                {
+                  name: info.name,
+                  label: info.label,
+                  ok: info.ok,
+                  summary: info.summary,
+                  content: info.content,
+                  diff: info.diff,
+                },
+                theme,
+              )) {
+                ctx.io.writeErr(`${outLine}\n`);
+              }
+            } catch {
+              noteHiccup();
             }
             if (spinnerAllowed) spinner.start();
           },
@@ -1037,14 +1246,14 @@ export async function runChat(
             // partial reply line FIRST so the footer lands BELOW the reply
             // text, never above it (also keeps consecutive tool-loop turns
             // from merging into one markdown line).
-            const flushed = md.flush();
+            const flushed = safeFlush();
             if (flushed !== '') r.writeRaw(`${flushed}\n`);
             const footer = chatFooterLine(totals.usage, totals.charge);
             if (footer !== undefined) r.gray(footer);
           },
         },
       });
-      const tail = md.flush(); // normally '' — onTurnComplete flushed already
+      const tail = safeFlush(); // normally '' — onTurnComplete flushed already
       if (tail !== '') r.writeRaw(`${tail}\n`);
 
       // The loop returned — the history is consistent; adopt it.
@@ -1071,6 +1280,10 @@ export async function runChat(
       // The failed turn is dropped entirely — the user can retype it.
       history.pop();
       if (err instanceof SeloraApiError && err.kind === 'cancelled') {
+        // Ctrl+C also drops the one queued prompt (v0.9) — an aborted turn
+        // must never roll into a line the user typed for a context that no
+        // longer exists.
+        queued.length = 0;
         r.bullet('Request cancelled — session kept');
       } else if (
         err instanceof SeloraApiError &&

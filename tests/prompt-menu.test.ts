@@ -557,6 +557,18 @@ describe('PromptRouter (real readline over a wire)', () => {
     h.router.detach();
   });
 
+  it('v0.9: a multibyte character split across chunks reassembles (no U+FFFD garbage)', () => {
+    const h = makeRouter({ cwd: process.cwd() });
+    const star = Buffer.from('✦', 'utf8'); // 3 bytes: E2 9C A6
+    h.stdin.write(star.subarray(0, 1)); // an incomplete tail is held, not garbled
+    expect(h.rl.line).toBe('');
+    h.stdin.write(star.subarray(1));
+    expect(h.rl.line).toBe('✦');
+    h.stdin.write('\r');
+    expect(h.lines).toEqual(['✦']);
+    h.router.detach();
+  });
+
   it('Tab executes the highlighted command like Enter does', () => {
     const h = makeRouter({ cwd: process.cwd() });
     h.stdin.write('/to');

@@ -9,10 +9,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { startMockServer, type MockServer } from './mock/server.js';
 import {
   CHAT_COMPLETION_NONSTREAM,
@@ -698,7 +698,7 @@ describe('chat REPL', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('v0.7 registry: /help prints the exact v0.6 list, and every command dispatches identically', async () => {
+  it('v0.9 registry: /help prints the exact list, and every command dispatches identically', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installChatRoutes([CHAT_STREAM_FULL]);
     const { io, cap } = replIo([
@@ -713,7 +713,7 @@ describe('chat REPL', () => {
     ]);
     await runChat(replCtx(io), { cwd: chatCwd() });
     const text = cap.all();
-    // /help — the v0.6 list, line for line, in order
+    // /help — the registry list, line for line, in order
     const helpLines = [
       '/help — show this list',
       '/model [id] — show or switch the model (verified before switching)',
@@ -721,9 +721,12 @@ describe('chat REPL', () => {
       '/clear — clear the conversation history',
       '/tools — list the agent tools available this session',
       '/permissions — show what is auto-allowed this session',
+      '/plan [clear] — show the plan-mode proposal list (or clear it)',
       '/cost — session totals (requests, tokens, cost)',
       '/exit — end the session (Ctrl+D also works)',
-      'shift+tab — cycle the permission mode (manual → accept edits → auto)',
+      'shift+tab — cycle the permission mode (manual → accept edits → auto → plan)',
+      'Ctrl+R — search past prompts (Enter inserts, does not send)',
+      '! <cmd> — run a shell command here (never sent to the model)',
       '? — keyboard shortcuts',
     ];
     let at = -1;
@@ -816,5 +819,71 @@ describe('chat REPL', () => {
     expect(text).toContain(`✗ unknown theme "nope" — available: ${THEME_NAMES.join(', ')}`);
     expect(process.exitCode).toBeUndefined();
     saveConfig({ apiKey: FAKE_KEY_USER }); // leave no theme behind for later suites
+  });
+
+  it('v0.9 plan mode: shift+tab ×3 reaches plan; a write is proposed, not executed; /plan shows and clears it', async () => {
+    saveConfig({ apiKey: FAKE_KEY_USER });
+    const WRITE_ROUND: string[] = [
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_P1","type":"function","function":{"name":"write_file","arguments":"{\\"path\\":\\"out.txt\\",\\"content\\":\\"planned\\"}"}}]},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12},"gateway":{"charge":"0.000100"}}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    let calls = 0;
+    server.setHandler((req) => {
+      if (req.method === 'GET' && req.path.startsWith('/v1/models/')) {
+        return { status: 200, body: modelDetailBody(req.path.slice('/v1/models/'.length)) };
+      }
+      if (req.method === 'POST' && req.path === '/v1/chat/completions') {
+        calls += 1;
+        return { status: 200, sse: calls === 1 ? WRITE_ROUND : CHAT_STREAM_FULL };
+      }
+      return { status: 404, body: NOT_FOUND };
+    });
+    // a PassThrough stdin: shift+tab must arrive AFTER the prompt is active
+    const stdin = new PassThrough();
+    let out = '';
+    let err = '';
+    const io: CliIo = {
+      stdin,
+      isTTY: true,
+      out: (s) => {
+        out += `${s}\n`;
+      },
+      err: (s) => {
+        err += `${s}\n`;
+      },
+      writeOut: (s) => {
+        out += s;
+      },
+      writeErr: (s) => {
+        err += s;
+      },
+    };
+    const cwd = chatCwd();
+    const session = runChat(replCtx(io), { cwd });
+    await until(() => err.includes('❯ '), 'prompt drawn');
+    // manual → acceptEdits → auto → plan
+    stdin.write('\x1b[Z');
+    stdin.write('\x1b[Z');
+    stdin.write('\x1b[Z');
+    await until(() => err.includes('◈ plan mode on · ? for shortcuts'), 'plan mode line');
+    stdin.write('make a file\n');
+    await until(() => calls === 2, 'turn finished after the proposed write');
+    await until(() => err.split('❯ ').length - 1 >= 2, 'prompt redrawn after the turn');
+    expect(existsSync(join(cwd, 'out.txt'))).toBe(false); // proposed, never executed
+    expect(err).toContain('plan mode: proposal recorded — not executed');
+    stdin.write('/plan\n');
+    await until(() => err.includes('· Plan (1 proposal, newest last)'), 'plan list');
+    expect(err).toContain('·   1. write_file(out.txt)');
+    stdin.write('/plan clear\n');
+    await until(() => err.includes('· Plan cleared.'), 'cleared');
+    stdin.write('/plan\n');
+    await until(() => err.includes('· No proposals yet'), 'empty after clear');
+    stdin.write('/exit\n');
+    await session;
+    expect(`${out}\n${err}`).toContain('✓ Session ended');
+    expect(process.exitCode).toBeUndefined();
   });
 });

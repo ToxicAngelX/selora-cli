@@ -11,7 +11,7 @@ v0.5 gives the CLI a **galaxy-themed terminal UI** (Claude-Code-style): an
 animated starfield logo pinned at the top of the screen (per-character
 gradient sweep + a starfield that keeps twinkling at a slow ambient rate),
 a `❯` prompt with context and permission-mode status lines (shift+tab cycles
-manual → accept-edits → auto), streaming markdown rendering, `● / ⎿`
+manual → accept-edits → auto → plan), streaming markdown rendering, `● / ⎿`
 tool-call display, colored diffs, a shimmering spinner (thinking is shown as
 an animation, never printed as text), and an arrow-key permission menu — with
 four themes (`galaxy`, `nebula`, `aurora`, `mono`) and honest
@@ -30,6 +30,20 @@ same treatment for file paths (dirs deepen with a trailing `/`, images are
 highlighted), and `/model` with no arguments becomes an arrow-key model
 picker. All of it is TTY-only — piped stdin, `--json`, and NO_COLOR behave
 exactly as before.
+
+v0.8 adds the **workspace trust screen**: the first time you run
+`selora chat` in a folder, a one-time arrow-key check asks whether you trust
+it (persisted per folder; `selora trust` manages the list; pipelines and
+`--yes`/`--json` never see it).
+
+v0.9 is the **power-user release**: `Ctrl+R` searches your prompt history
+(past sessions included — Enter inserts, never sends), `! <cmd>` runs a
+one-shot shell command without leaving chat (folded output, exit code shown,
+never sent to the model), **plan mode** joins the shift+tab cycle (reads run,
+every mutation is recorded as a proposal instead of executing — `/plan`
+reviews the list), the mid-turn input queue is capped at one (a second
+typed-ahead line is discarded, never silently stacked), and a renderer
+exception can no longer kill the REPL.
 
 Ask it things like _"create a folder called Projects on my desktop"_ and it
 does it, no shell required.
@@ -188,6 +202,39 @@ Enter to confirm · Esc to cancel
   `selora trust remove <dir>`.
 - Trust only skips the one-time question — the per-tool permission gates
   (prompts, modes, outside-root session grants) are unchanged.
+
+## The chat REPL at a glance
+
+`selora chat` permission modes, cycled with **shift+tab** at the prompt:
+
+| Mode          | Reads & search | File edits   | Shell commands | Deletions | Outside the project |
+| ------------- | -------------- | ------------ | -------------- | --------- | ------------------- |
+| `manual`      | ask            | ask          | ask            | ask       | ask                 |
+| `acceptEdits` | run            | run          | ask            | ask       | ask                 |
+| `auto`        | run            | run          | run            | **ask**   | run (grants the dir) |
+| `plan`        | run            | **proposed** | **proposed**   | **proposed** | ask              |
+
+`plan` executes nothing that mutates: the tool call is recorded as a
+numbered proposal (`/plan` shows the list, `/plan clear` empties it) and the
+model is told to keep planning. Review the list, then shift+tab to
+`acceptEdits`/`auto` and re-ask. Deletions ask in **every** mode.
+
+While a reply streams, at most **one** typed-ahead line queues
+(`· queued — runs when this turn finishes`); a second is discarded with a
+notice (echoed dimly, never sent), and Ctrl+C aborting the turn drops the
+queued line too.
+
+Also at the prompt:
+
+- **Ctrl+R** — search past prompts (this session + every saved session of the
+  project, newest first, deduped). Type to filter, arrows to move, **Enter
+  inserts** the pick at the prompt — it is never sent for you. Esc cancels
+  and restores the line you were typing.
+- **`! <cmd>`** — run a shell command right there (`! npm test`): the output
+  renders as a dim folded block (last 40 lines + `… N more lines`) with the
+  exit code, and **nothing is sent to the model**. No permission gate — you
+  typed it, same trust as your own terminal. Mid-turn a `!` line is refused
+  (never queued); `\!` escapes a literal leading `!`.
 
 ## Privacy
 

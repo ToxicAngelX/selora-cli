@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-07
+
+History search, the `!` shell escape, plan mode, a single queued prompt, and
+a stability pass. No new runtime dependencies (still exactly `commander` +
+`picocolors`).
+
+### Added
+
+- **Ctrl+R prompt-history search**: at the chat prompt, Ctrl+R opens an
+  interactive search over this session's sent prompts PLUS every persisted
+  session of the project (the same `.selora/sessions/` store `selora resume`
+  reads) — newest first, deduped, case-insensitive substring filter, arrows
+  to move. Enter (or Tab) **inserts** the pick at the prompt — it is never
+  sent for you — and Esc cancels, restoring the line you were typing. Long
+  prompts clamp to the terminal width in the list (the full text inserts).
+  Non-TTY / `--json` / NO_COLOR / TERM=dumb: the key is inert, never blocks.
+- **`!` one-shot shell escape**: `! npm test` at the chat prompt runs the
+  command in the project root without leaving the session. Output renders as
+  a dim folded block (the last 40 lines + `… N more lines`), the exit code is
+  shown (non-zero highlighted), and the command + output are **never sent to
+  the model**. Deliberately no permission gate — you typed it, same trust as
+  your own terminal (unlike the agent's `run_command`, which executes
+  model-chosen commands and keeps its gate). While a turn streams, a `!` line
+  is refused with a one-line notice and never queued. `\!` escapes a literal
+  leading bang. Ctrl+C mid-`!` kills the command (SIGINT, then SIGKILL if it
+  lingers) instead of exiting the session.
+- **Plan mode** — the 4th shift+tab mode (`manual → acceptEdits → auto →
+  plan`, status line `◈ plan mode on · ? for shortcuts`). Read/search tools
+  run normally; every mutating tool call is NOT executed — the loop denies it
+  ("plan mode: proposal recorded — switch modes (shift+tab) to execute" goes
+  back to the model) and records the tool's label as a proposal. `/plan`
+  shows the numbered list (newest last), `/plan clear` empties it; the list
+  survives mode switches so you can plan, review, then shift+tab to
+  acceptEdits/auto and re-ask.
+
+### Changed
+
+- **The shift+tab cycle gained a fourth mode** (plan). The v0.5 cycle-order
+  tests were updated for the new order — an intentional spec change, not a
+  regression; manual/acceptEdits/auto semantics are unchanged.
+- **The mid-turn input queue is capped at ONE** (was: unbounded). The first
+  line typed while a turn streams queues with `· queued — runs when this turn
+  finishes`; a second prints `· one prompt already queued — it runs next`,
+  echoes the discarded line dimly, and drops it — never queued, never sent.
+  Ctrl+C aborting a turn also clears the queued line.
+
+### Fixed
+
+- A renderer exception mid-turn can no longer kill the REPL: the turn
+  degrades to raw unstyled text with a one-line notice and the session
+  continues. A slash command that throws now fails with a `✗` line instead of
+  crashing the session.
+- Split multibyte keypresses (a UTF-8 character arriving across two stdin
+  chunks) reassemble correctly in the prompt router instead of landing as
+  replacement characters; partial/unknown escape tails are held briefly, then
+  ignored gracefully.
+- Killing the CLI mid-turn (SIGINT, and by extension SIGTERM: auto-save is an
+  atomic tmp+rename after each COMPLETED turn) always leaves a valid,
+  parseable session file containing exactly the completed turns — pinned by a
+  test.
+
 ## [0.8.0] - 2026-10-07
 
 The workspace trust screen, and the auto-mode outside-access fix. No new
