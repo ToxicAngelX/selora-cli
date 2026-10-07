@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { cleanup, freshEnv, type TempEnv } from './helpers/env.js';
 import {
   canonicalDir,
@@ -179,7 +179,8 @@ describe('trust store', () => {
 
   it('homeAbbrev: ~ for $HOME-prefixed paths, verbatim otherwise', () => {
     const home = env.dir; // freshEnv points HOME here
-    expect(homeAbbrev(join(home, 'proj'))).toBe('~/proj');
+    // join uses the PLATFORM separator: '~\proj' on Windows, '~/proj' on POSIX.
+    expect(homeAbbrev(join(home, 'proj'))).toBe(`~${sep}proj`);
     expect(homeAbbrev('/usr/local/bin')).toBe('/usr/local/bin');
     expect(homeAbbrev(home)).toBe('~');
   });
