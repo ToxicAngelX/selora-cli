@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 — context meter + auto-compaction
+
+- **Context meter** — a live `ctx ▰▰▱▱ 62% · 18,500/30,000` line in the prompt
+  block: estimated tokens vs the budget, gradient fill that turns warning at
+  75% and error at 90%.
+- **Auto-compaction** — at 90% of the budget the oldest turns fold into ONE
+  summary message (cheap summarizer call; `agent.compactModel` in selora.json
+  picks the model). Whole-turn folding keeps the wire shape valid (tool calls
+  keep their results); the last 6 messages are always kept verbatim; fails
+  soft (a broken summarizer never eats the conversation). An animated
+  `⏳ compacting context` pulse plays while it runs.
+- Config: `agent.contextTokens` (default 30000), `agent.compactModel`.
+
 ## 1.1.0 — selora update
 
 - **`selora update`** — self-update: reads npm's `latest` dist-tag, compares

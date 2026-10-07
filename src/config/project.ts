@@ -34,6 +34,12 @@ export interface ProjectAgentConfig {
   allowWindowsCmd?: boolean;
   /** v0.3: opt-in for web tools in this project (also global config / env). */
   webTools?: boolean;
+  /** v1.2: context budget in tokens for the ctx meter + auto-compaction
+   *  (default 30000). Must be an integer between 1000 and 1,000,000. */
+  contextTokens?: number;
+  /** v1.2: the model used to summarize folded turns (default: the session
+   *  model). Non-empty string. */
+  compactModel?: string;
 }
 
 export interface ProjectConfig {
@@ -124,6 +130,22 @@ export function loadProjectConfig(cwd: string): ProjectConfig {
         agent.webTools = a['webTools'];
       } else {
         console.error('· Ignoring agent.webTools — must be a boolean.');
+      }
+    }
+    if (Object.hasOwn(a, 'contextTokens')) {
+      const v = a['contextTokens'];
+      if (typeof v === 'number' && Number.isInteger(v) && v >= 1000 && v <= 1_000_000) {
+        agent.contextTokens = v;
+      } else {
+        console.error('· Ignoring agent.contextTokens — must be an integer between 1000 and 1000000.');
+      }
+    }
+    if (Object.hasOwn(a, 'compactModel')) {
+      const v = a['compactModel'];
+      if (typeof v === 'string' && v !== '') {
+        agent.compactModel = v;
+      } else {
+        console.error('· Ignoring agent.compactModel — must be a non-empty string.');
       }
     }
     if (Object.keys(agent).length > 0) cfg.agent = agent;

@@ -97,6 +97,13 @@ import { DEFAULT_MODEL_FALLBACK } from './model.js';
 import { formatCount, formatDurationCompact } from '../format.js';
 import { microToWireString, parseMoneyMicro } from '../money.js';
 import { runAgentLoop, DEFAULT_MAX_TURNS } from '../agent/loop.js';
+import {
+  contextBar,
+  estimateTokensHistory,
+  CRITICAL_RATIO,
+  DEFAULT_CONTEXT_TOKENS,
+} from '../agent/contextmeter.js';
+import { maybeCompact } from '../agent/compact.js';
 import { builtinTools } from '../agent/tools/index.js';
 import { makeSubagentTool } from '../agent/tools/subagent.js';
 import {
@@ -760,7 +767,11 @@ export async function runChat(
   const tools: Tool[] = flags.safe
     ? builtinTools().filter((t) => t.kind === 'read')
     : builtinTools();
-  const maxTurns = loadProjectConfig(cwd).agent?.maxTurns ?? DEFAULT_MAX_TURNS;
+  const projectAgent = loadProjectConfig(cwd).agent;
+  const maxTurns = projectAgent?.maxTurns ?? DEFAULT_MAX_TURNS;
+  // v1.2 context budget + compaction model (selora.json agent.*)
+  const contextTokens = projectAgent?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  const compactModel = projectAgent?.compactModel;
 
   const renderDiff = (before: string, after: string): readonly string[] =>
     renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 });
@@ -814,6 +825,18 @@ export async function runChat(
     const tokens = sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : '';
     ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd()}${tokens}\n`));
     ctx.io.writeErr(`${theme.dim(modeStatusLine(safeMode ? 'safe' : mode))}\n`);
+    // v1.2: the context meter — estimated tokens vs the budget, gradient fill
+    // turning warning/error as it fills. TTY only (raw escapes + noise).
+    if (ctx.io.isTTY && !ctx.json && history.length > 0) {
+      ctx.io.writeErr(
+        theme.dim(contextBar(estimateTokensHistory(history), { tokens: contextTokens }, {
+          warning: (s) => theme.warning(s),
+          error: (s) => theme.error(s),
+          gradientAt: (s, i, total) => theme.gradientAt(s, i, total),
+          dim: (s) => theme.dim(s),
+        })) + '\n',
+      );
+    }
     ctx.io.writeErr(`${theme.gradient('❯')} `);
   }
 
@@ -1181,6 +1204,49 @@ export async function runChat(
     };
     if (spinnerAllowed) spinner.start();
     try {
+      // v1.2: auto-compaction — when the estimate crosses the threshold, fold
+      // the oldest turns into one summary message (cheap model, fails soft).
+      // The animated pulse line plays on TTYs; json mode stays silent.
+      const estNow = estimateTokensHistory(history);
+      if (!ctx.json && history.length > 0 && estNow >= contextTokens * CRITICAL_RATIO) {
+        if (spinnerAllowed) {
+          ctx.io.writeErr('\r\x1b[2K');
+        }
+        const frameSeq = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let fi = 0;
+        const pulseTimer = spinnerAllowed
+          ? setInterval(() => {
+              fi = (fi + 1) % frameSeq.length;
+              try {
+                ctx.io.writeErr(
+                  `\r\x1b[2K${theme.error(`⏳ compacting context ${frameSeq[fi]} — summarizing earlier turns…`)}`,
+                );
+              } catch {
+                /* render hiccup: animation must never kill the REPL */
+              }
+            }, 120)
+          : undefined;
+        pulseTimer?.unref?.();
+        try {
+          const compaction = await maybeCompact(history, client, {
+            tokens: contextTokens,
+            compactModel: compactModel ?? current.id,
+          });
+          if (compaction.compacted) {
+            history.length = 0;
+            history.push(...compaction.messages);
+            if (!ctx.json) {
+              const savedTok = compaction.tokensBefore - compaction.tokensAfter;
+              r.bullet(
+                `context compacted — ${compaction.folded} messages folded into a summary (≈${formatCount(BigInt(Math.max(0, savedTok)))} tokens reclaimed)`,
+              );
+            }
+          }
+        } finally {
+          if (pulseTimer !== undefined) clearInterval(pulseTimer);
+          if (spinnerAllowed) ctx.io.writeErr('\r\x1b[2K');
+        }
+      }
       const result = await runAgentLoop({
         client,
         model: current.id,
