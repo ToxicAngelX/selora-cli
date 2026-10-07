@@ -277,6 +277,7 @@ describe('run', () => {
       'git_log',
       'git_commit',
       'git_restore',
+      'spawn_agent',
     ]);
     // each definition is the verified wire shape
     for (const t of tools) {
@@ -356,7 +357,7 @@ describe('run', () => {
         content: 'Permission denied by user.',
       });
       // the follow-up request carries the tool definitions again
-      expect((JSON.parse(chatReqs[1]!.body) as { tools: unknown[] }).tools.length).toBe(18);
+      expect((JSON.parse(chatReqs[1]!.body) as { tools: unknown[] }).tools.length).toBe(19); // 18 built-ins + spawn_agent
       expect(process.exitCode).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-07
+
+**Subagents.** The model can delegate self-contained tasks to helper agents —
+nested agent loops with their own fresh context. Plus v0.9's stability fixes
+landed from the pty harness findings. No new runtime dependencies.
+
+### Added
+
+- **`spawn_agent` tool**: the model delegates a task to a helper agent — a
+  nested `runAgentLoop` with a fresh `[user: task]` history, the parent's
+  toolset minus `spawn_agent` (no recursion), the same cwd, the SAME
+  interactive permission gate and session memory (an `a` answer or an
+  outside-dir grant carries into the helper). The task string is all the
+  helper sees; its final report is the tool result fed back to the parent.
+  Optional `tools: [...]` restricts the helper's toolset. Capped at 12 turns.
+  `kind: exec` + always-asks (even in auto mode — a helper can do anything
+  its tools allow). Activity lines (`· sub started: …`, `sub: → read_file(x)`,
+  `· sub finished (N turns): …`) stream into the parent transcript; the
+  helper's tokens fold into the session totals. `--safe` and `run --json`
+  without `--yes` exclude it.
+
+### Fixed (from the v0.9 pty harness)
+
+- the trust screen's "No, exit" hung forever: `pickFromList` left raw stdin
+  in flowing mode (a referenced tty handle) — cleanup now pauses stdin
+- after trusting, the REPL was dead: the prompt router now resumes stdin on
+  attach
+- chat now wires the loop's `onActivity` lines (`· outside access granted
+  for this session: …`) which printed nowhere in the REPL
+- terminal width 0 (harness/CI ptys) falls back to 80 columns everywhere
+
 ## [0.9.0] - 2026-10-07
 
 History search, the `!` shell escape, plan mode, a single queued prompt, and

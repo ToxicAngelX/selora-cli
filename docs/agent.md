@@ -129,6 +129,36 @@ gate (the mode asker auto-allows them). Denials are not failures, so the
 circuit breaker never counts them. The proposals live in the chat session
 (`/plan`, `/plan clear`) — memory-only, like the permission memory.
 
+## Subagents — spawn_agent (v1.0)
+
+The model can delegate a self-contained task to a **helper agent**: a nested
+agent loop with a fresh `[{role:user, task}]` history, the same cwd, the same
+permission gate, and the parent's toolset minus `spawn_agent` itself (one
+level of delegation — a helper cannot spawn helpers).
+
+- **`kind: exec` + always-asks**: spawning a helper is at least as sensitive
+  as a shell command (it can do anything its tools allow), so every spawn
+  prompts — even in auto mode. The prompt shows the exact task, the tool
+  list, and the model.
+- **Shared permissions**: the helper's tool calls go through the SAME
+  interactive prompts and the same session memory — an `a` (always) answer
+  granted to the parent applies inside the helper too, and an outside-root
+  directory granted by either carries to both.
+- **Turn cap**: helpers run at most 12 turns (subtasks should be small; the
+  parent can always spawn another helper).
+- **Activity lines**: `· sub started: …` / `sub: → read_file(x)` / `· sub
+  finished (N turns): …` stream into the parent transcript so delegation is
+  never invisible.
+- **Usage**: the helper's turns are real gateway requests; their tokens fold
+  into the session totals.
+- **`--safe` excludes it** (read-only means read-only) and `run --json`
+  without `--yes` excludes it (the helper's prompts cannot display in JSON
+  mode).
+
+The task string must be fully self-contained — the helper sees ONLY it. Bad
+shapes (`task` missing/empty, unknown tool names in `tools`) are honest
+`{ok:false}` results fed back to the model.
+
 ## The tools
 
 Inside the project root, all filesystem tools keep the v0.2 sandbox: paths
@@ -154,6 +184,7 @@ project's `context.exclude` globs are enforced.
 | `git_status` / `git_diff` / `git_log` | Read-only git views via `spawn("git", args)`.                                                                                                                                                                                                                      |
 | `git_commit`                          | Stages the listed files and commits — the message is an argv element, never shell text.                                                                                                                                                                            |
 | `git_restore`                         | `git checkout -- <path>` for exactly one path.                                                                                                                                                                                                                     |
+| `spawn_agent` (v1.0)                  | Delegates a self-contained task to a nested agent loop (a helper agent). The task string is all the helper sees; it returns its final report as text. Same cwd, same permission prompts, no nested `spawn_agent`. Optional `tools: [...]` restricts its toolset. |
 
 **Windows:** `run_command` refuses by default — opt in per project with
 `"agent": {"allowWindowsCmd": true}` in `selora.json` (it then spawns

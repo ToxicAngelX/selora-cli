@@ -164,7 +164,7 @@ describe('chat agent — startup screen + tool round-trip', () => {
       messages: Array<Record<string, unknown>>;
     };
     // the request carried the full 18-tool registry
-    expect(body.tools.length).toBe(18);
+    expect(body.tools.length).toBe(19); // 18 built-ins + spawn_agent (v1.0)
     expect(String(body.messages[2]!['content'])).toContain('import');
     // the final answer rendered through the markdown stream
     expect(cap.out()).toContain('Hello, world!');
@@ -243,7 +243,7 @@ describe('chat agent — slash commands', () => {
     ]);
     await runChat(ctx(io), { cwd: chatCwd() });
     const text = cap.all();
-    expect(text).toContain('Tools (18, mode: manual): read_file');
+    expect(text).toContain('Tools (19, mode: manual): read_file');
     expect(text).toContain('Nothing auto-allowed yet');
     expect(text).toContain('Requests: 0');
     expect(text).toContain('✓ Theme set to nebula');

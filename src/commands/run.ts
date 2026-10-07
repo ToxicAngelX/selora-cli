@@ -46,7 +46,9 @@ import {
 } from '../images.js';
 import { runAgentLoop, DEFAULT_MAX_TURNS } from '../agent/loop.js';
 import { builtinTools } from '../agent/tools/index.js';
+import { makeSubagentTool } from '../agent/tools/subagent.js';
 import {
+  SessionAllows,
   createAutoAsker,
   createDenyingAsker,
   createInteractiveAsker,
@@ -259,6 +261,30 @@ export async function runRun(
         },
       });
 
+  // v1.0 subagents: the model can delegate self-contained tasks to a nested
+  // agent loop sharing this run's cwd, permission gate, and session memory.
+  // --safe keeps it out (read-only means read-only); --json without --yes
+  // keeps it out (the sub's prompts can't display in JSON mode).
+  const allows = new SessionAllows();
+  if (!flags.safe && !(ctx.json && flags.yes !== true)) {
+    tools.push(
+      makeSubagentTool({
+        client,
+        model: () => model,
+        permissions,
+        allows,
+        renderDiff: (before, after) =>
+          renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 }),
+        onSubEvent: (line) => {
+          if (!ctx.json) r.writeRawGray(`${line}\n`);
+        },
+        signal: () => interrupt.signal,
+        autoApprove: flags.yes === true,
+        parentTools: tools,
+      }),
+    );
+  }
+
   let content = '';
   let sawReasoning = false;
 
@@ -282,6 +308,7 @@ export async function runRun(
       cwd,
       permissions,
       autoApprove: flags.yes === true,
+      allows,
       signal: interrupt.signal,
       renderDiff: (before, after) =>
         renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 }),

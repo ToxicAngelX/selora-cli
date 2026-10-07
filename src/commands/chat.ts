@@ -95,9 +95,10 @@ import { Renderer } from '../terminal/render.js';
 import { chatFooterLine, formatChatCost } from './chat-footer.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
 import { formatCount, formatDurationCompact } from '../format.js';
-import { microToWireString } from '../money.js';
+import { microToWireString, parseMoneyMicro } from '../money.js';
 import { runAgentLoop, DEFAULT_MAX_TURNS } from '../agent/loop.js';
 import { builtinTools } from '../agent/tools/index.js';
+import { makeSubagentTool } from '../agent/tools/subagent.js';
 import {
   SessionAllows,
   createInteractiveAsker,
@@ -763,6 +764,36 @@ export async function runChat(
 
   const renderDiff = (before: string, after: string): readonly string[] =>
     renderUnifiedDiff(before, after, diffStyleFor(theme), { context: 3 });
+  // v1.0 subagents: the model can delegate self-contained tasks to nested
+  // agent loops. Safe mode (--safe) excludes it — read-only means read-only.
+  if (!flags.safe) {
+    tools.push(
+      makeSubagentTool({
+        client,
+        model: () => current.id,
+        permissions,
+        allows,
+        renderDiff,
+        onSubEvent: (line) => {
+          try {
+            ctx.io.writeErr(`${theme.dim(line)}\n`);
+          } catch {
+            // the channel hiccuped — sub lines are best-effort
+          }
+        },
+        onSubUsage: (usage) => {
+          if (usage.totalTokens > 0) sessionTokens += usage.totalTokens;
+          if (usage.charge !== undefined && usage.charge !== '') {
+            const micro = parseMoneyMicro(usage.charge);
+            if (micro !== null) sessionCostMicro = (sessionCostMicro ?? 0n) + micro;
+          }
+        },
+        signal: () => currentAbort?.signal,
+        autoApprove: flags.yes === true && ctx.json,
+        parentTools: tools,
+      }),
+    );
+  }
 
   // Built per theme: /theme swaps the live theme object, and the spinner must
   // follow it — a spinner constructed once would keep the pre-switch palette.

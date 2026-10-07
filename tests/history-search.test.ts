@@ -212,7 +212,7 @@ function makeHistoryRouter(opts: { pool?: string[]; promptActive?: boolean } = {
   const lines: string[] = [];
   rl.on('line', (l) => lines.push(l));
   let menuText = '';
-  let active = opts.promptActive ?? true;
+  const active = opts.promptActive ?? true;
   const router = new PromptRouter({
     stdin,
     rl,

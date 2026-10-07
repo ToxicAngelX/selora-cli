@@ -236,6 +236,23 @@ Also at the prompt:
   typed it, same trust as your own terminal. Mid-turn a `!` line is refused
   (never queued); `\!` escapes a literal leading `!`.
 
+## Subagents (v1.0)
+
+The model can delegate a self-contained task to a **helper agent** — a nested
+agent loop with its own fresh context:
+
+- it sees **only the task string** you (the model) hand it, works in the same
+  directory, and returns its final report as text
+- it goes through the **same permission prompts** — an `a` answer or an
+  outside-root grant carries into the helper, so it never silently mutates
+  anything you would have been asked about
+- every spawn asks (even in `auto` mode), shows the exact task + tool list,
+  and is capped at 12 turns
+- its activity streams into your transcript (`· sub started: …`,
+  `sub: → read_file(x)`, `· sub finished (N turns): …`), and its tokens fold
+  into the session totals
+- helpers cannot spawn helpers (one level of delegation)
+
 ## Privacy
 
 - **Zero telemetry.** No analytics, no crash reporting, no usage pings. By
