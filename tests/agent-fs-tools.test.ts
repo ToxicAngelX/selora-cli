@@ -423,6 +423,45 @@ describe('remove', () => {
     }
   });
 
+  itLinux('dry run carries a deleted-kind diff payload for text files (display only)', async () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, 'note.txt'), 'line one\nline two\n', 'utf8');
+      const dry = await removeTool.run({ path: 'note.txt' }, ctx(root, true));
+      expect(dry.ok).toBe(true);
+      expect(dry.diff).toEqual({
+        before: 'line one\nline two\n',
+        after: '',
+        path: 'note.txt',
+        kind: 'deleted',
+      });
+      // the file is still there — the payload is pure preview data
+      expect(existsSync(join(root, 'note.txt'))).toBe(true);
+      // the REAL run stays content-free (the loop reuses the dry payload)
+      const real = await removeTool.run({ path: 'note.txt', mode: 'permanent' }, ctx(root));
+      expect(real.ok).toBe(true);
+      expect(real.diff).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  itLinux('dry run: no diff payload for directories or binary files', async () => {
+    const root = tempRoot();
+    try {
+      mkdirSync(join(root, 'dir'));
+      const dirDry = await removeTool.run({ path: 'dir' }, ctx(root, true));
+      expect(dirDry.ok).toBe(true);
+      expect(dirDry.diff).toBeUndefined();
+      writeFileSync(join(root, 'bin.dat'), Buffer.from([0x89, 0x50, 0x00, 0x4e]));
+      const binDry = await removeTool.run({ path: 'bin.dat' }, ctx(root, true));
+      expect(binDry.ok).toBe(true);
+      expect(binDry.diff).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   itPosix('a guarded path fails even in dry-run — no prompting, no claimed success', async () => {
     const root = tempRoot();
     try {

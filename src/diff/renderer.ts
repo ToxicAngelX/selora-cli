@@ -79,37 +79,40 @@ interface PaintEnv {
 
 /** Paint one row of segments. Zero escapes when the env allows none. */
 function paintRow(segs: readonly PaintSeg[], env: PaintEnv): string {
+  // SGR state is tracked across segments: a transition resets and restates
+  // the wanted attributes, so a dim gutter never leaks dim onto the marker
+  // and code that follow it (SGR 2 persists until reset otherwise).
   let out = '';
-  let open = false;
+  let curFg = '';
+  let curBg = '';
+  let curBold = false;
+  let curDim = false;
   for (const seg of segs) {
     if (seg.text === '') continue;
-    const parts: string[] = [];
-    if (env.emphasis) {
-      if (seg.bold === true) parts.push('1');
-      if (seg.dim === true) parts.push('2');
-    }
+    const wantBold = env.emphasis && seg.bold === true;
+    const wantDim = env.emphasis && seg.dim === true;
+    let wantFg = '';
+    let wantBg = '';
     if (env.colorLevel > 0) {
-      if (seg.fg !== undefined) {
-        const f = fgSgrParams(seg.fg, env.colorLevel);
-        if (f !== '') parts.push(f);
-      }
-      if (seg.bg !== undefined) {
-        const b = bgSgrParams(seg.bg, env.colorLevel);
-        if (b !== '') parts.push(b);
-      }
+      if (seg.fg !== undefined) wantFg = fgSgrParams(seg.fg, env.colorLevel);
+      if (seg.bg !== undefined) wantBg = bgSgrParams(seg.bg, env.colorLevel);
     }
-    if (parts.length === 0) {
-      if (open) {
-        out += RESET;
-        open = false;
-      }
-      out += seg.text;
-    } else {
-      out += `${CSI}${parts.join(';')}m${seg.text}`;
-      open = true;
+    if (wantFg !== curFg || wantBg !== curBg || wantBold !== curBold || wantDim !== curDim) {
+      const parts: string[] = [];
+      if (wantBold) parts.push('1');
+      if (wantDim) parts.push('2');
+      if (wantFg !== '') parts.push(wantFg);
+      if (wantBg !== '') parts.push(wantBg);
+      out += RESET;
+      if (parts.length > 0) out += `${CSI}${parts.join(';')}m`;
+      curFg = wantFg;
+      curBg = wantBg;
+      curBold = wantBold;
+      curDim = wantDim;
     }
+    out += seg.text;
   }
-  if (open) out += RESET;
+  if (curFg !== '' || curBg !== '' || curBold || curDim) out += RESET;
   return out;
 }
 

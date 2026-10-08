@@ -28,6 +28,12 @@ export interface PromptInputDeps {
   onInterrupt: () => void;
   onExit: () => void;
   onMode: () => void;
+  /**
+   * ctrl+r: expand/collapse the most recent elided file-change diff. Return
+   * true when the key was consumed (a diff was toggled); false falls back to
+   * history search. Optional — absent means ctrl+r is always history search.
+   */
+  onExpand?: (() => boolean) | undefined;
 }
 
 interface RawInput extends NodeJS.ReadableStream {
@@ -262,7 +268,7 @@ export class PromptInput {
       else if (ch === '\x03') { this.closeMenu(true); this.deps.onInterrupt(); }
       else if (ch === '\x04') { if (this.line === '') this.deps.onExit(); else { this.buffer.deleteForward(); this.edited(); } }
       else if (ch === '\t') this.complete();
-      else if (ch === '\x12') this.searchHistory();
+      else if (ch === '\x12') { if (this.deps.onExpand?.() !== true) this.searchHistory(); }
       else if (ch === '\x7f' || ch === '\b') { this.buffer.backspace(); this.edited(); }
       else if (ch === '\x01') this.buffer.moveHome();
       else if (ch === '\x05') this.buffer.moveEnd();

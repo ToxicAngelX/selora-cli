@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentUsageTotals } from '../agent/loop.js';
+import type { DiffPaletteName } from '../diff/types.js';
 import { formatCount } from '../format.js';
 import { MarkdownStream } from './markdown.js';
 import { markdownStyleFor, renderToolResult, renderToolStart } from './chatui.js';
@@ -7,10 +8,25 @@ import type { TerminalSurface } from './terminal-surface.js';
 import type { Theme } from './theme.js';
 import { sanitizeTerminalText } from './terminal-text.js';
 
-/** Presents identified agent events; never interprets model text as a tool call. */
+export interface ConversationViewOptions {
+  /** Diff palette for file-change tool results (diff config). */
+  diffPalette?: DiffPaletteName | undefined;
+}
+
+/**
+ * Presents identified agent events; never interprets model text as a tool call.
+ *
+ * Tool headers follow the Claude Code lifecycle on the append-only surface:
+ * while a tool runs its `● Name(args)` header sits DIM in the live region
+ * (with the phase line); when the result arrives the header commits above the
+ * live region with the ● colored by the outcome, followed by the ⎿ result
+ * line and — for file changes — the flat numbered diff body. A result whose
+ * diff was elided is remembered as the ctrl+r toggle target.
+ */
 export class ConversationView {
   private readonly transcript = new TranscriptStore();
   private readonly renderedEvents = new Set<string>();
+  private readonly pendingTools = new Map<string, { name: string; label: string }>();
   private markdown: MarkdownStream | undefined;
   private assistantId: string | undefined;
   private partial = '';
@@ -20,11 +36,14 @@ export class ConversationView {
   private outputTokens: number | undefined;
   private timer: NodeJS.Timeout | undefined;
   private sequence = 0;
+  /** The most recent elided file-change render — ctrl+r toggles its view. */
+  private lastChange: { expanded: boolean; render(expanded: boolean): string[] } | undefined;
 
   constructor(
     private readonly surface: TerminalSurface,
     private readonly theme: () => Theme,
     private readonly width: () => number,
+    private readonly opts: ConversationViewOptions = {},
   ) {}
 
   user(text: string): void {
@@ -80,17 +99,51 @@ export class ConversationView {
     if (event.type === 'tool-start') {
       this.phase = 'Running tools…';
       this.transcript.apply({ type: 'replace', id: event.id, kind: 'tool', text: event.label });
-      this.surface.writeOutput(renderToolStart(event.name, event.label, this.theme()));
+      // The header shows DIM in the live region while the tool runs; the
+      // committed (outcome-colored) header lands with the result.
+      this.pendingTools.set(event.id, { name: event.name, label: event.label });
     } else if (event.type === 'tool-result') {
       this.transcript.apply({ type: 'replace', id: event.id, kind: 'tool', text: event.summary });
       this.transcript.apply({ type: 'complete', id: event.id });
-      this.surface.writeOutput(renderToolResult(event, this.theme()).join('\n'));
+      const pending = this.pendingTools.get(event.id);
+      this.pendingTools.delete(event.id);
+      const theme = this.theme();
+      const header = renderToolStart(
+        pending?.name ?? event.name,
+        pending?.label ?? event.label,
+        theme,
+        event.ok ? 'ok' : 'error',
+      );
+      const rendered = renderToolResult(event, theme, {
+        width: this.width(),
+        expandHint: true,
+        palette: this.opts.diffPalette,
+      });
+      this.surface.writeOutput([header, ...rendered.lines].join('\n'));
+      // Only the latest elided file change is the ctrl+r target.
+      this.lastChange = rendered.fileChange;
       this.phase = 'Thinking…';
     } else {
       this.transcript.apply({ type: 'replace', id: event.id, kind: 'status', text: event.text });
       this.surface.writeOutput(this.theme().dim(sanitizeTerminalText(event.text)));
     }
     this.redraw();
+  }
+
+  /**
+   * ctrl+r: toggle the most recent elided file-change diff between its
+   * collapsed and full view. The surface is append-only, so the alternate
+   * view commits as a fresh block below. Returns false when there is nothing
+   * to expand (the caller then falls back to history search).
+   */
+  toggleLastChange(): boolean {
+    const change = this.lastChange;
+    if (change === undefined) return false;
+    change.expanded = !change.expanded;
+    const rows = change.render(change.expanded);
+    if (rows.length === 0) return false;
+    this.surface.writeOutput(rows.join('\n'));
+    return true;
   }
 
   usage(totals: AgentUsageTotals): void {
@@ -102,6 +155,7 @@ export class ConversationView {
     this.finishAssistant();
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
+    this.pendingTools.clear();
     this.surface.setLive([]);
   }
 
@@ -132,7 +186,11 @@ export class ConversationView {
     const tokens = this.outputTokens ?? Math.ceil(this.generated / 4);
     const count = tokens > 0 ? ` · ↓ ${this.outputTokens === undefined ? '≈' : ''}${formatCount(BigInt(tokens))} tokens` : '';
     const theme = this.theme();
-    const rows = this.partial === '' ? [] : [theme.star(this.partial)];
+    const rows: string[] = [];
+    for (const pending of this.pendingTools.values()) {
+      rows.push(renderToolStart(pending.name, pending.label, theme, 'running'));
+    }
+    if (this.partial !== '') rows.push(theme.star(this.partial));
     rows.push(theme.violet(`✽ ${this.phase}`) + theme.dim(` (${elapsed}s${count})`));
     rows.push(theme.dim('  ⎿ Tip: Esc stops this turn · type your next prompt below'));
     this.surface.setLive(rows);

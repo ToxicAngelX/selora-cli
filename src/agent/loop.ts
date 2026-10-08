@@ -35,7 +35,7 @@ import {
   type WireToolDefinition,
 } from '../api/endpoints/chat.js';
 import { parseMoneyMicro, microToWireString } from '../money.js';
-import { throwIfCancelled, type Tool, type ToolKind } from './tool.js';
+import { throwIfCancelled, type Tool, type ToolKind, type ToolResult } from './tool.js';
 import { grantDirFor } from './userPaths.js';
 import { PLAN_MODE_DENY_REASON } from './modes.js';
 import type { ReviewDecision } from '../diff/types.js';
@@ -83,6 +83,8 @@ export type AgentEvent =
       summary: string;
       content?: string | undefined;
       diff?: readonly string[] | undefined;
+      /** Raw before/after of a file change — the UI renders the flat diff + result line from it. */
+      diffPayload?: NonNullable<ToolResult['diff']> | undefined;
     }
   | { type: 'status'; id: string; text: string };
 
@@ -109,6 +111,8 @@ export interface AgentLoopCallbacks {
         content?: string | undefined;
         /** Pre-rendered colored diff lines (via opts.renderDiff). */
         diff?: readonly string[] | undefined;
+        /** Raw before/after of a file change — the UI renders the flat diff + result line from it. */
+        diffPayload?: NonNullable<ToolResult['diff']> | undefined;
       }) => void)
     | undefined;
   /** After each stream turn: per-turn usage/charge AND the running totals. */
@@ -636,7 +640,7 @@ async function executeToolCall(
     // the real run proceeds (one dry run, no prompt, nothing persisted).
     const probe = await previewTool(input, allows.outsideDirs());
     if (probe.outside !== undefined) allows.rememberDir(grantDirFor(probe.outside.abs));
-    return await runApproved(tool, input, label, reply, toolEvents, cb, opts, allows.outsideDirs());
+    return await runApproved(tool, input, label, reply, toolEvents, cb, opts, allows.outsideDirs(), probe.diff);
   }
 
   // Dry run first — its result is the permission prompt's preview, and an
@@ -690,13 +694,13 @@ async function executeToolCall(
     const dirs = allows.outsideDirs();
     if (tool.neverAutoAllow === true) {
       // The tool itself still requires its own confirmation every time.
-      return await promptLoop(tool, input, label, preview, styledDiff, dirs);
+      return await promptLoop(tool, input, label, preview, styledDiff, dirs, dry.diff);
     }
     if (answer.decision === 'allow-session' && tool.kind !== 'read') {
       // One prompt per unique outside write: remember the exact label too.
       allows.remember(tool.kind, tool.name, label);
     }
-    return await runApproved(tool, input, label, reply, toolEvents, cb, opts, dirs);
+    return await runApproved(tool, input, label, reply, toolEvents, cb, opts, dirs, dry.diff);
   }
 
   // v1.3: the interactive file-change review replaces the generic gate for
@@ -740,7 +744,7 @@ async function executeToolCall(
     }
   }
 
-  return await promptLoop(tool, input, label, preview, styledDiff, allows.outsideDirs());
+  return await promptLoop(tool, input, label, preview, styledDiff, allows.outsideDirs(), dry.diff);
 
   async function previewTool(input: Record<string, unknown>, outsideDirs: readonly string[]) {
     throwIfCancelled(opts.signal);
@@ -771,6 +775,19 @@ async function executeToolCall(
       kind: tool.kind,
       ok: applied.ok,
       summary: applied.summary,
+      // Full applies carry the change payload so the transcript shows the flat
+      // diff; a partial-hunk apply's result differs from the proposal, so it
+      // keeps the plain summary line.
+      ...(applied.ok && acceptedHunks === undefined
+        ? {
+            diffPayload: {
+              before: change.before,
+              after: change.after,
+              path: change.path,
+              kind: change.kind,
+            },
+          }
+        : {}),
     });
     reply(applied.summary);
     toolEvents.push({ name: tool.name, label, ok: applied.ok, summary: applied.summary });
@@ -786,6 +803,7 @@ async function executeToolCall(
     preview: string | undefined,
     styledDiff: readonly string[] | undefined,
     outsideDirs: readonly string[],
+    dryDiff?: ToolResult['diff'],
   ): Promise<CallOutcome> {
     for (;;) {
       const req: PermissionRequest = {
@@ -807,7 +825,7 @@ async function executeToolCall(
           allows.remember(tool.kind, tool.name, label);
           cb.onActivity?.('· allowed for this session');
         }
-        return await runApproved(tool, input, label, reply, toolEvents, cb, opts, outsideDirs);
+        return await runApproved(tool, input, label, reply, toolEvents, cb, opts, outsideDirs, dryDiff);
       }
       // 'edit' (exec tools only): replace the command, dry-run, ask again.
       throwIfCancelled(opts.signal);
@@ -842,6 +860,7 @@ async function executeToolCall(
         return 'failed';
       }
       preview = reDry.preview ?? reDry.summary;
+      dryDiff = reDry.diff;
       styledDiff =
         reDry.diff !== undefined
           ? opts.renderDiff?.(reDry.diff.before, reDry.diff.after, reDry.diff.path)
@@ -893,6 +912,11 @@ async function runApproved(
   cb: AgentLoopCallbacks,
   opts: AgentLoopOptions,
   outsideDirs: readonly string[],
+  /**
+   * The dry run's diff payload, when one happened (the remove tool's real run
+   * carries no diff — its dry-run payload is the display's only source).
+   */
+  dryDiff?: ToolResult['diff'],
 ): Promise<CallOutcome> {
   const freshLabel = tool.permissionLabel(input);
   throwIfCancelled(opts.signal);
@@ -902,12 +926,15 @@ async function runApproved(
     outsideDirs,
     signal: opts.signal,
   });
+  // The real run's own payload wins; the dry run's is the display fallback.
+  const payload = result.diff ?? dryDiff;
   const styledDiff =
-    result.diff !== undefined
-      ? opts.renderDiff?.(result.diff.before, result.diff.after, result.diff.path)
+    payload !== undefined
+      ? opts.renderDiff?.(payload.before, payload.after, payload.path)
       : undefined;
   // v1.3: checkpoint successful file changes for /undo (the review-apply path
-  // checkpoints itself — this covers the classic gate).
+  // checkpoints itself — this covers the classic gate). Only the REAL run's
+  // payload checkpoints: a dry-run fallback (remove) changes display only.
   if (result.ok && result.diff !== undefined && opts.onFileChange !== undefined) {
     opts.onFileChange({
       path: result.diff.path ?? freshLabel,
@@ -924,6 +951,7 @@ async function runApproved(
     summary: result.summary,
     content: result.content,
     diff: styledDiff,
+    diffPayload: payload,
   });
   reply(result.content ?? result.summary);
   toolEvents.push({ name: tool.name, label: freshLabel, ok: result.ok, summary: result.summary });

@@ -3,28 +3,34 @@
  * renderers, plus the Claude-Code-style tool display helpers —
  *   ● Read(src/api.ts)
  *     ⎿ read src/index.ts (1 line, 14 B)
- * with content collapsed to 5 lines ("… +N lines") and pre-rendered diffs
- * printed indented. Every helper degrades to plain text when the theme is
- * disabled (level 0 / mono) — the display is then structure, not decoration.
+ * with content collapsed to 5 lines ("… +N lines"). File-change tools
+ * (write_file / edit_file / remove) render through ui/filediff.ts instead:
+ * a ⎿ result line ('Wrote 182 lines to path', 'Updated path with 3
+ * additions and 1 removal', 'Deleted path') over a flat numbered diff body.
+ * The ● is dim while the tool runs, green on success, red on failure.
+ * Every helper degrades to plain text when the theme is disabled (level 0 /
+ * mono) — the display is then structure, not decoration.
  */
 
 import type { Theme } from './theme.js';
 import type { MarkdownStyle } from './markdown.js';
 import type { DiffStyle } from './diff.js';
+import type { ColorScheme, DiffPaletteName } from '../diff/types.js';
+import { renderFileChangeToolResult, type FileChangePayload } from './filediff.js';
 import { sanitizeTerminalText, terminalTextWidth, truncateTerminalText } from './terminal-text.js';
 
 /** Tool name → display name (read_file → Read). Unknown → capitalized. */
 const TOOL_DISPLAY: Readonly<Record<string, string>> = {
   read_file: 'Read',
   write_file: 'Write',
-  edit_file: 'Edit',
+  edit_file: 'Update',
   glob: 'Glob',
   grep: 'Grep',
   list_dir: 'List',
   create_dir: 'CreateDir',
   move: 'Move',
   copy: 'Copy',
-  remove: 'Remove',
+  remove: 'Delete',
   run_command: 'Run',
   web_search: 'Search',
   web_fetch: 'Fetch',
@@ -42,14 +48,24 @@ export function toolDisplayName(name: string): string {
   return mapped ?? safeName.charAt(0).toUpperCase() + safeName.slice(1);
 }
 
+/** Lifecycle state for the ● marker: dim while running, green ok, red error. */
+export type ToolRunState = 'running' | 'ok' | 'error';
+
 /** `● Read(src/api.ts)` — the tool-call header line. */
-export function renderToolStart(name: string, label: string, theme: Theme): string {
+export function renderToolStart(
+  name: string,
+  label: string,
+  theme: Theme,
+  state: ToolRunState = 'running',
+): string {
   const safeName = sanitizeTerminalText(name);
   const safeLabel = sanitizeTerminalText(label);
   const args = safeLabel.startsWith(`${safeName}(`)
     ? safeLabel.slice(safeName.length + 1, -1)
     : safeLabel;
-  return `${theme.cyan('●')} ${theme.star(`${toolDisplayName(safeName)}(${sanitizeTerminalText(args)})`)}`;
+  const dot =
+    state === 'ok' ? theme.success('●') : state === 'error' ? theme.error('●') : theme.dim('●');
+  return `${dot} ${theme.star(`${toolDisplayName(safeName)}(${sanitizeTerminalText(args)})`)}`;
 }
 
 /** How many content lines survive before the "… +N lines" collapse. */
@@ -63,12 +79,73 @@ export interface ToolResultDisplay {
   content?: string | undefined;
   /** Pre-rendered styled diff lines (from the loop's renderDiff). */
   diff?: readonly string[] | undefined;
+  /**
+   * The raw before/after payload of a file change (write_file / edit_file /
+   * remove). When present on a SUCCESSFUL result the display is the flat
+   * ui/filediff.ts rendering and the result line is computed from the change
+   * itself ('Wrote N lines…'), replacing the tool's summary text.
+   */
+  diffPayload?: FileChangePayload | undefined;
+}
+
+export interface ToolResultRenderOptions {
+  /** Terminal columns for the diff body. Default 80. */
+  width?: number | undefined;
+  /** Append '(ctrl+r to expand)' to elision rows (the interactive chat UI). */
+  expandHint?: boolean | undefined;
+  /** Diff palette (diff config). Default 'classic'. */
+  palette?: DiffPaletteName | undefined;
+  /** Force the color scheme; default = detect. */
+  scheme?: ColorScheme | undefined;
+}
+
+export interface RenderedToolResult {
+  lines: string[];
+  /**
+   * Set when the file-change body was elided: render(expanded) re-renders the
+   * body rows in the collapsed (false) or full (true) view — the ctrl+r
+   * toggle. `expanded` reflects the view currently in `lines`.
+   */
+  fileChange?: { expanded: boolean; render(expanded: boolean): string[] } | undefined;
 }
 
 /** The `⎿` result lines: summary, collapsed content, and the diff. */
-export function renderToolResult(info: ToolResultDisplay, theme: Theme): string[] {
+export function renderToolResult(
+  info: ToolResultDisplay,
+  theme: Theme,
+  opts: ToolResultRenderOptions = {},
+): RenderedToolResult {
   const out: string[] = [];
   const mark = info.ok ? theme.success('⎿') : theme.error('⎿');
+
+  // File-change results (write_file / edit_file / remove): the flat diff
+  // body with the computed result line. Binary payloads and no-op overwrites
+  // fall through to the plain summary (renderFileChangeToolResult → undefined).
+  if (info.ok && info.diffPayload !== undefined) {
+    const renderOpts = {
+      width: opts.width ?? 80,
+      expandHint: opts.expandHint ?? false,
+      palette: opts.palette,
+      scheme: opts.scheme,
+    };
+    const rendered = renderFileChangeToolResult(info.diffPayload, theme, renderOpts);
+    if (rendered !== undefined) {
+      out.push(`  ${mark}  ${theme.dim(rendered.result)}`);
+      out.push(...rendered.rows);
+      if (!rendered.expandable) return { lines: out };
+      const payload = info.diffPayload;
+      return {
+        lines: out,
+        fileChange: {
+          expanded: false,
+          render: (expanded: boolean) =>
+            renderFileChangeToolResult(payload, theme, { ...renderOpts, expanded, expandHint: true })
+              ?.rows ?? [],
+        },
+      };
+    }
+  }
+
   const summary = sanitizeTerminalText(info.summary);
   out.push(`  ${mark} ${info.ok ? theme.dim(summary) : theme.error(summary)}`);
   if (info.content !== undefined && info.content !== '') {
@@ -80,14 +157,12 @@ export function renderToolResult(info: ToolResultDisplay, theme: Theme): string[
     }
   }
   if (info.diff !== undefined && info.diff.length > 0) {
-    // v1.3: the boxed diff renderer produces full-width rows (╭ │ ╰) that
-    // must NOT be indented (padding to the terminal width would overflow);
-    // legacy pre-rendered rows keep the 6-space indent.
-    const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
-    const boxed = info.diff[0]!.replace(ANSI_RE, '').startsWith('╭');
-    for (const line of info.diff) out.push(boxed ? line : `      ${line}`);
+    // Pre-rendered diff rows print verbatim. Since v1.5 these are the flat
+    // ui/filediff.ts rows (full-width, gutter-led) — indenting them would
+    // overflow the row, so the old 6-space indent for legacy rows is gone.
+    for (const line of info.diff) out.push(line);
   }
-  return out;
+  return { lines: out };
 }
 
 // ---------------------------------------------------------------------------

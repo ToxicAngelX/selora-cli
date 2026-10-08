@@ -155,6 +155,7 @@ import { renderStartupScreen } from '../ui/logo.js';
 import { MarkdownStream } from '../ui/markdown.js';
 import { Spinner, SpinnerArbiter } from '../ui/spinner.js';
 import { markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { renderFileChangeRows } from '../ui/filediff.js';
 import { resolveDiffConfig } from '../config/diff.js';
 import {
   applyHunks,
@@ -802,23 +803,18 @@ export async function runChat(
     expandGenerated: !diffConfig.collapseGenerated,
   });
   /**
-   * v1.3: every before/after the loop surfaces becomes a boxed FileDiff render
-   * (the path carries the title + syntax language). Kind is inferred from the
-   * empty side — the same convention the tools' diff payloads follow.
+   * v1.5: before/after pairs render as the FLAT Claude-Code-style diff body
+   * (ui/filediff.ts — left gutter, +/- markers, full-width add/del rows) for
+   * the permission prompt. Tool RESULTS re-render from the loop's diffPayload
+   * (the result line 'Wrote N lines…' needs the stats, not just rows).
    */
   const renderDiff = (before: string, after: string, path?: string): readonly string[] => {
-    const p = path ?? 'file';
-    const change: FileChange =
-      before === '' && after !== ''
-        ? { kind: 'created', path: p, newText: after }
-        : after === '' && before !== ''
-          ? { kind: 'deleted', path: p, oldText: before }
-          : { kind: 'modified', path: p, oldText: before, newText: after };
-    return renderFileDiff(
-      computeFileDiff(change, { context: diffConfig.context }),
-      theme,
-      diffRenderOpts(),
-    );
+    const rendered = renderFileChangeRows({ before, after, path }, theme, {
+      width: termWidth(),
+      context: diffConfig.context,
+      palette: diffConfig.palette,
+    });
+    return rendered?.rows ?? [];
   };
   // v1.0 subagents: the model can delegate self-contained tasks to nested
   // agent loops. Safe mode (--safe) excludes it — read-only means read-only.
@@ -926,6 +922,19 @@ export async function runChat(
       : undefined;
   };
 
+  /** Secret/conflict notes on the UI channel (spinner-safe), no diff body. */
+  const printDiffNotes = (
+    secrets: readonly SecretFinding[],
+    conflict: string | undefined,
+  ): void => {
+    for (const s of secrets) {
+      arbiter.uiLine(
+        theme.warning(`⚠ possible secret on line ${s.line} (${s.rule}): ${s.snippet}`),
+      );
+    }
+    if (conflict !== undefined) arbiter.uiLine(theme.warning(`⚠ conflict: ${conflict}`));
+  };
+
   /** A boxed diff + secret/conflict notes on the UI channel (spinner-safe). */
   const printDiffBlock = (
     fd: FileDiff,
@@ -935,12 +944,7 @@ export async function runChat(
     const lines = renderFileDiff(fd, theme, diffRenderOpts());
     if (surface) surface.writeOutput(lines.join('\n'));
     else for (const line of lines) arbiter.uiLine(line);
-    for (const s of secrets) {
-      arbiter.uiLine(
-        theme.warning(`⚠ possible secret on line ${s.line} (${s.rule}): ${s.snippet}`),
-      );
-    }
-    if (conflict !== undefined) arbiter.uiLine(theme.warning(`⚠ conflict: ${conflict}`));
+    printDiffNotes(secrets, conflict);
   };
 
   /** Applied changes this turn (for the combined same-file diff at turn end). */
@@ -1047,9 +1051,11 @@ export async function runChat(
             if (decision.action === 'cancel') reviewCancelled = true;
             return decision;
           }
-          // The auto paths still print the diff (spec: auto applies, still
-          // prints) — secret and conflict notes ride along.
-          printDiffBlock(fd, secrets, conflict);
+          // The auto paths still SHOW the change (spec: auto applies, still
+          // prints) — as the flat diff on the tool RESULT (the loop attaches
+          // the payload). Here only the secret/conflict notes print, so the
+          // change is not doubled in two styles.
+          printDiffNotes(secrets, conflict);
           return { action: 'apply' };
         },
         apply: applyFileChange,
@@ -1208,7 +1214,7 @@ export async function runChat(
       run: () => {
         for (const cmd of slashCommands) r.bullet(slashHelpLine(cmd));
         r.bullet('shift+tab — cycle the permission mode (manual → accept edits → auto → plan)');
-        r.bullet('Ctrl+R — search past prompts (Enter inserts, does not send)');
+        r.bullet('Ctrl+R — expand/collapse a truncated file diff (otherwise: search past prompts)');
         r.bullet('! <cmd> — run a shell command here (never sent to the model)');
         r.bullet('? — keyboard shortcuts');
       },
@@ -1463,7 +1469,9 @@ export async function runChat(
       cols: () => process.stdout.columns || 80,
       rows: () => process.stdout.rows || 24,
     });
-    view = new ConversationView(surface, () => theme, () => termWidth());
+    view = new ConversationView(surface, () => theme, () => termWidth(), {
+      diffPalette: diffConfig.palette,
+    });
     input = new PromptInput({
       stdin: ctx.io.stdin, surface, theme: () => theme,
       cols: () => process.stdout.columns || 80,
@@ -1476,6 +1484,7 @@ export async function runChat(
       commands: () => slashCommands,
       history: () => collectPromptHistory(cwd, sentPrompts), cwd,
       onSubmit: receiveLine,
+      onExpand: () => view?.toggleLastChange() ?? false,
       onInterrupt: () => {
         if (currentShellKill) currentShellKill();
         else if (currentAbort) currentAbort.abort();
@@ -1521,7 +1530,7 @@ export async function runChat(
       for (const cmd of [
         'shift+tab — cycle the permission mode (manual → accept edits → auto → plan)',
         '? — this list',
-        'Ctrl+R — search past prompts (Enter inserts, does not send)',
+        'Ctrl+R — expand/collapse a truncated file diff (otherwise: search past prompts)',
         '! <cmd> — run a shell command here (never sent to the model)',
         'Ctrl+C — stop the streaming reply (at the prompt: exit)',
         'Ctrl+D — exit the session',
@@ -1769,9 +1778,12 @@ export async function runChat(
                   summary: info.summary,
                   content: info.content,
                   diff: info.diff,
+                  diffPayload: info.diffPayload,
                 },
                 theme,
-              )) {
+                // The classic path has no ctrl+r — elision rows stay plain.
+                { width: termWidth(), palette: diffConfig.palette },
+              ).lines) {
                 arbiter.uiLine(outLine);
               }
             } catch {

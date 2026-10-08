@@ -228,7 +228,9 @@ queued line too.
 
 Also at the prompt:
 
-- **Ctrl+R** — search past prompts (this session + every saved session of the
+- **Ctrl+R** — expand/collapse the most recent truncated file diff (`… +N
+  lines` in a tool result). When there is no collapsed diff to expand, it
+  searches past prompts instead (this session + every saved session of the
   project, newest first, deduped). Type to filter, arrows to move, **Enter
   inserts** the pick at the prompt — it is never sent for you. Esc cancels
   and restores the line you were typing.
@@ -240,12 +242,36 @@ Also at the prompt:
 
 ## Diff & review
 
-Every file change the agent proposes renders as a boxed, syntax-highlighted
-diff before it lands — unified or side-by-side, with word-level highlights on
-the exact tokens that changed and honest fallbacks for binary and generated
-files. Nothing is written until you say so, writes are atomic (tmp + rename,
-with conflict detection when the file changed since it was read), and every
-applied change is checkpointed for undo:
+In the transcript, every file write, edit, and delete renders Claude-Code
+style — a one-line header (dim ● while the tool runs, green on success, red
+on failure), a computed result line, and a flat numbered diff body (old line
+numbers on `-` removals, new on `+` additions, 3 lines of dim context, `...`
+between hunks, full-width green/red rows; long creates and deletes collapse
+to a preview with `… +N lines (ctrl+r to expand)`):
+
+```
+● Update(src/utils/format.ts)
+  ⎿  Updated src/utils/format.ts with 3 additions and 3 removals
+ 2   import { round } from './math.js';
+ 3
+ 4   // Format a price for display in the storefront.
+ 5 - export function formatPrice(price, currency) {
+ 5 + export function formatPrice(price, currency = 'USD') {
+ 6     const rate = getExchangeRate(currency);
+ 7 -   const total = price * rate;
+ 8 -   return total.toFixed(2);
+ 7 +   const total = round(price * rate);
+ 8 +   return `${total.toFixed(2)} ${currency}`;
+ 9   }
+```
+
+When the review gate is active (manual mode), the proposed change renders as
+a boxed, syntax-highlighted diff before it lands — unified or side-by-side,
+with word-level highlights on the exact tokens that changed and honest
+fallbacks for binary and generated files. Nothing is written until you say
+so, writes are atomic (tmp + rename, with conflict detection when the file
+changed since it was read), and every applied change is checkpointed for
+undo:
 
 ```
 ╭─ ✎ Modified  src/utils/format.ts ─────────────────────── +3 −3 ─╮

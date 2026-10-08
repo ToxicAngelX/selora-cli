@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.5.0 — Claude-Code-style file-change display
+
+- **Flat tool-result diffs replace the boxed panel** — `write_file` /
+  `edit_file` / `remove` results now render Claude Code style: a one-line
+  header (`● Write(path)` / `● Update(path)` / `● Delete(path)` — dim while
+  the tool runs, green on success, red on failure), a result line computed
+  from the change itself (`⎿  Wrote 182 lines to path` · `⎿  Updated path
+  with 3 additions and 1 removal` · `⎿  Deleted path`), then the diff body:
+  right-aligned line-number gutter on the LEFT (old numbers on removals, new
+  on additions/context), `+`/`-` markers, 3 lines of dim context, a dim `...`
+  between non-adjacent hunks, and full-width green/red backgrounds on
+  added/removed rows. Long lines truncate to the terminal width; NO_COLOR /
+  non-TTY output is plain `+`/`-` with zero escapes.
+- **Collapsible creates and deletes** — long new/deleted files preview the
+  first 10 lines, then `… +N lines (ctrl+r to expand)`. Ctrl+R in the chat UI
+  toggles the full/compact view of the last change; with nothing to expand it
+  falls back to history search. Edits cap at 200 body rows with the same
+  expand affordance.
+- **`remove` previews what it deletes** — its dry run carries a deleted-kind
+  diff payload for text files within the tool cap, so the permission prompt
+  and the transcript show the content. Directories and binaries keep the
+  stats preview. Deletion behavior (trash/permanent, path guards) and `/undo`
+  history semantics are unchanged.
+- **Permission-prompt diff previews** render in the same flat style, so the
+  prompt and the transcript agree. The boxed renderer stays where it belongs:
+  the interactive review gate (`y`/`n`/`a`/`h`/`e`/`s`/`q`) and `/diff`.
+
 ## 1.3.1 — cross-platform CI fixes
 
 - **macOS: reviewed writes failed under symlinked roots** — the review-apply

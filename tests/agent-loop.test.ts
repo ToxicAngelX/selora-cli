@@ -694,6 +694,50 @@ function loopClient(): SeloraClient {
 }
 
 describe('v1.3 loop hooks', () => {
+  it('remove: the result carries the DRY-run deleted payload for the flat display', async () => {
+    const REMOVE_ROUND: string[] = [
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_D1","type":"function","function":{"name":"remove","arguments":"{\\"path\\":\\"old.txt\\",\\"mode\\":\\"permanent\\"}"}}]},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    routeToolRounds(1, REMOVE_ROUND);
+    const dir = tempProject();
+    try {
+      writeFileSync(join(dir, 'old.txt'), 'gone soon\n', 'utf8');
+      const seen: Array<{ ok: boolean; diffPayload?: unknown }> = [];
+      const result = await runAgentLoop({
+        client: loopClient(),
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'delete it' }],
+        tools: builtinTools(),
+        maxTurns: 5,
+        cwd: dir,
+        permissions: { ask: async () => 'allow', replacement: async () => null },
+        autoApprove: false,
+        callbacks: {
+          onDelta: () => {},
+          onTurnComplete: () => {},
+          onToolResult: (info) => {
+            seen.push({ ok: info.ok, diffPayload: info.diffPayload });
+          },
+        },
+      });
+      expect(existsSync(join(dir, 'old.txt'))).toBe(false);
+      // the real run carries no diff — the result display got the dry run's
+      expect(seen).toEqual([
+        {
+          ok: true,
+          diffPayload: { before: 'gone soon\n', after: '', path: 'old.txt', kind: 'deleted' },
+        },
+      ]);
+      expect(result.stop).toBe('completed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('dryRun: a write tool shows its diff, writes NOTHING, tells the model plainly', async () => {
     routeToolRounds(1, WRITE_ROUND);
     const dir = tempProject();

@@ -41,6 +41,7 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -49,7 +50,9 @@ import type { Dirent } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import type { Tool, ToolContext, ToolResult } from '../tool.js';
+import { MAX_TOOL_FILE_BYTES } from '../paths.js';
 import { isInsideAny, resolveUserPath } from '../userPaths.js';
+import { isBinaryText } from '../../diff/engine.js';
 
 /** Display cap for one list_dir result (… +N more carries the rest). */
 const MAX_LIST_ENTRIES = 500;
@@ -744,10 +747,28 @@ export const removeTool: Tool = {
     const permanent = mode === 'permanent' || process.platform === 'win32';
 
     if (ctx.dryRun) {
+      // Display payload (v1.5): a text FILE within the tool cap carries its
+      // content as a deleted-kind diff, so the permission prompt and the
+      // result display can show what is about to be / was removed. The real
+      // run stays content-free; the loop reuses this payload for display.
+      // Directories, oversized files, binary content, and unreadable files
+      // keep the plain stats preview. Deletion behavior is untouched.
+      let diff: ToolResult['diff'];
+      if (!st.isDir && st.size <= MAX_TOOL_FILE_BYTES) {
+        try {
+          const content = readFileSync(t.target.abs, 'utf8');
+          if (!isBinaryText(content)) {
+            diff = { before: content, after: '', path: t.target.display, kind: 'deleted' };
+          }
+        } catch {
+          // unreadable — the plain preview still applies
+        }
+      }
       return {
         ok: true,
         summary: `would remove ${t.target.display} (${statsNote}) — ${permanent ? 'PERMANENT — cannot be undone' : 'moves to trash'}`,
         preview: `${t.target.abs}\n${statsNote}\n${permanent ? 'PERMANENT — cannot be undone' : 'moves to trash'}`,
+        ...(diff !== undefined ? { diff } : {}),
       };
     }
     if (permanent) {

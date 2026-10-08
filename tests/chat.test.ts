@@ -725,7 +725,7 @@ describe('chat REPL', () => {
       '/cost — session totals (requests, tokens, cost)',
       '/exit — end the session (Ctrl+D also works)',
       'shift+tab — cycle the permission mode (manual → accept edits → auto → plan)',
-      'Ctrl+R — search past prompts (Enter inserts, does not send)',
+      'Ctrl+R — expand/collapse a truncated file diff (otherwise: search past prompts)',
       '! <cmd> — run a shell command here (never sent to the model)',
       '? — keyboard shortcuts',
     ];

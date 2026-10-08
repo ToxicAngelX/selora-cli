@@ -58,10 +58,10 @@ import {
 import type { Tool } from '../agent/tool.js';
 import { themeFor } from '../ui/theme.js';
 import { renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { renderFileChangeRows } from '../ui/filediff.js';
 import { sanitizeTerminalText } from '../ui/terminal-text.js';
 import { resolveDiffConfig } from '../config/diff.js';
-import { computeFileDiff, DiffHistory, guardPath, renderFileDiff } from '../diff/index.js';
-import type { FileChange, RenderOptions } from '../diff/types.js';
+import { DiffHistory, guardPath } from '../diff/index.js';
 import {
   loadSession,
   newSession,
@@ -284,29 +284,15 @@ export async function runRun(
     root: cwd,
     maxBytes: diffConfig.historyMaxSizeMB * 1024 * 1024,
   });
-  const runDiffRenderOpts = (): RenderOptions => ({
-    view: diffConfig.view,
-    width: process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80,
-    maxLines: diffConfig.maxLines,
-    palette: diffConfig.palette,
-    syntaxHighlight: diffConfig.syntaxHighlight,
-    wordDiff: diffConfig.wordDiff,
-    showWhitespace: diffConfig.showWhitespace,
-    expandGenerated: !diffConfig.collapseGenerated,
-  });
+  // v1.5: flat Claude-Code-style rows (ui/filediff.ts) — the same renderer the
+  // tool-result display uses, so the prompt preview and the transcript agree.
   const renderDiff = (before: string, after: string, path?: string): readonly string[] => {
-    const p = path ?? 'file';
-    const change: FileChange =
-      before === '' && after !== ''
-        ? { kind: 'created', path: p, newText: after }
-        : after === '' && before !== ''
-          ? { kind: 'deleted', path: p, oldText: before }
-          : { kind: 'modified', path: p, oldText: before, newText: after };
-    return renderFileDiff(
-      computeFileDiff(change, { context: diffConfig.context }),
-      theme,
-      runDiffRenderOpts(),
-    );
+    const rendered = renderFileChangeRows({ before, after, path }, theme, {
+      width: process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80,
+      context: diffConfig.context,
+      palette: diffConfig.palette,
+    });
+    return rendered?.rows ?? [];
   };
 
   // The permission gate. JSON mode cannot prompt: --yes auto-approves,
@@ -422,9 +408,17 @@ export async function runRun(
                   summary: info.summary,
                   content: info.content,
                   diff: info.diff,
+                  diffPayload: info.diffPayload,
                 },
                 theme,
-              )) {
+                {
+                  width:
+                    process.stdout.columns && process.stdout.columns > 0
+                      ? process.stdout.columns
+                      : 80,
+                  palette: diffConfig.palette,
+                },
+              ).lines) {
                 ctx.io.writeErr(`${outLine}\n`);
               }
             }
