@@ -142,7 +142,7 @@ describe('runUpdate', () => {
     };
     expect(parsed).toEqual({
       ok: true,
-      current: '1.3.1',
+      current: '1.4.0',
       latest: '1.5.0',
       update_available: true,
     });

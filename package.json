@@ -1,6 +1,6 @@
 {
   "name": "selora",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Open-source CLI for the Selora API gateway",
   "type": "module",
   "bin": {
