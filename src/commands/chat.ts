@@ -151,22 +151,7 @@ import {
   startShellCommand,
   type ShellRunResult,
 } from '../shellescape.js';
-import {
-  AMBIENT_DRIFT,
-  AMBIENT_INTERVAL_MS,
-  STARTUP_FRAME_COUNT,
-  bannerHeight,
-  makeLogoScene,
-  renderAmbientFrame,
-  renderCompactFrame,
-  renderSceneFrame,
-  renderStartupFrames,
-  renderStartupScreen,
-  startupTail,
-  sweepPhase,
-  type LogoScene,
-} from '../ui/logo.js';
-import { playFrames, trimEnd } from '../ui/animate.js';
+import { renderStartupScreen } from '../ui/logo.js';
 import { MarkdownStream } from '../ui/markdown.js';
 import { Spinner, SpinnerArbiter } from '../ui/spinner.js';
 import { markdownStyleFor, renderToolResult, renderToolStart } from '../ui/chatui.js';
@@ -202,6 +187,11 @@ import {
 } from '../ui/promptmenu.js';
 import { isTrustedDir } from '../config/trust.js';
 import { runTrustScreen, trustScreenCapable } from '../ui/trustscreen.js';
+import { TranscriptStore } from '../ui/transcript.js';
+import { restorePromptPaste } from '../ui/promptbar.js';
+import { PromptInput } from '../ui/prompt-input.js';
+import { TerminalSurface } from '../ui/terminal-surface.js';
+import { ConversationView } from '../ui/conversation-view.js';
 
 export interface ChatFlags {
   model?: string | undefined;
@@ -242,12 +232,6 @@ interface SessionModel {
   displayName: string;
 }
 
-/** Plain setTimeout-as-promise for the startup animation's frame cadence. */
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
 /** Verifies a model id via the public /v1/models/:id route; 404 propagates. */
 async function verifyModel(client: SeloraClient, id: string): Promise<SessionModel> {
   const m = await getModel(client, id);
@@ -258,8 +242,7 @@ function modelLabel(m: SessionModel): string {
   return m.displayName !== '' ? `${m.id} (${m.displayName})` : m.id;
 }
 
-function shortCwd(): string {
-  const cwd = process.cwd();
+function shortCwd(cwd = process.cwd()): string {
   const home = process.env['HOME'] ?? '';
   return home !== '' && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
 }
@@ -275,22 +258,28 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'git_commit',
 ]);
 
-/**
- * Rows the transcript region needs beneath the pinned banner for pinning to
- * be worth it (tips + the prompt block + a few reply rows).
- */
-const MIN_REGION_ROWS = 8;
-
 export async function runChat(
   ctx: CliContext,
   flags: ChatFlags,
   hooks: ChatHooks = {},
 ): Promise<void> {
+  let surface: TerminalSurface | undefined;
+  let input: PromptInput | undefined;
+  let view: ConversationView | undefined;
+  const usePromptInput = !ctx.json && ctx.io.isTTY && process.stdout.isTTY === true &&
+    process.stderr.isTTY === true && rawCapable(ctx.io.stdin) && process.env['TERM'] !== 'dumb';
+  const uiIo = {
+    ...ctx.io,
+    out: (text: string) => surface ? surface.writeOutput(text) : ctx.io.out(text),
+    err: (text: string) => surface ? surface.writeOutput(text) : ctx.io.err(text),
+    writeOut: (text: string) => surface ? surface.writeOutput(text) : ctx.io.writeOut(text),
+    writeErr: (text: string) => surface ? surface.writeOutput(text) : ctx.io.writeErr(text),
+  };
   const r = new Renderer({
-    out: ctx.io.out,
-    err: ctx.io.err,
-    rawOut: ctx.io.writeOut,
-    rawErr: ctx.io.writeErr,
+    out: uiIo.out,
+    err: uiIo.err,
+    rawOut: uiIo.writeOut,
+    rawErr: uiIo.writeErr,
     json: ctx.json,
     debug: ctx.debug,
   });
@@ -418,139 +407,21 @@ export async function runChat(
     if (!trusted) return; // "· not trusted — exiting" printed; exit 0
   }
 
-  // ------------------------------------------------------------------
-  // The pinned ambient banner (v0.5). On a color-capable TTY with enough
-  // rows, the logo/starfield canvas is drawn at the TOP of a cleared screen
-  // and kept alive forever: a DECSTBM scroll region confines the transcript
-  // below it, and a slow timer re-colors the same scene in place (DECSC/
-  // DECRC — ESC 7 / ESC 8, the universally supported save/restore — around
-  // the burst, so readline, the spinner and the permission menu never
-  // notice; CSI s/u is NOT universal and must not be used here). Everything
-  // degrades to the classic inline screen under NO_COLOR/mono/
-  // SELORA_NO_ANIMATE/short terminals.
-  // ------------------------------------------------------------------
-  let ambientTimer: NodeJS.Timeout | undefined;
-  let regionActive = false;
-  let ambientScene: LogoScene | null = null;
-  let ambientWidth = 80;
-  /** Banner rows while pinned — the closing-card teardown parks below them. */
-  let pinnedHeight = 0;
-
-  function ambientBurst(tick: number): void {
-    const rows =
-      ambientScene !== null
-        ? renderAmbientFrame(ambientScene, theme, tick)
-        : renderCompactFrame(theme, ambientWidth, tick * AMBIENT_DRIFT);
-    // No trailing newline: the last banner row must never feed the scroll.
-    ctx.io.writeOut(
-      `\x1b7\x1b[1;1H${rows.map((row) => `\x1b[2K${trimEnd(row)}`).join('\r\n')}\x1b8`,
-    );
-  }
-
-  function onResize(): void {
-    if (!regionActive) return;
-    // A resize reflows the transcript in terminal-specific ways and DECSTBM
-    // re-homes the cursor on xterm/Windows Terminal — re-pinning would
-    // corrupt the input line's position. Honest degradation instead: unpin
-    // and print a fresh STATIC banner inline at the new width (the session
-    // continues normally; /exit + restart restores the pinned banner).
-    unpin();
-    const w = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
-    for (const line of renderStartupScreen(theme, { width: w })) r.line(line);
-  }
-
-  /** Last-resort region reset if the process dies without a clean return. */
-  function exitReset(): void {
-    if (regionActive) {
-      try {
-        process.stdout.write('\x1b[r');
-      } catch {
-        // best effort — the process is going down
-      }
-      regionActive = false;
-    }
-  }
-
-  /**
-   * Tear the pinned region down. The DECSTBM reset (`\x1b[r`) HOMES the cursor
-   * per the DEC spec — left alone, whatever prints next lands on banner row 1
-   * and overprints the art (the v1.2 exit-summary corruption, and the shell
-   * prompt inherited the mess after exit). With closingCard the cursor parks
-   * just below the banner and everything under it is erased, so the exit
-   * summary prints as a clean closing frame and the shell gets a tidy edge.
-   * The resize path passes false: the session continues, and the fresh static
-   * banner reprint wants the home position as-is.
-   */
-  function unpin(closingCard = false): void {
-    if (ambientTimer !== undefined) {
-      clearInterval(ambientTimer);
-      ambientTimer = undefined;
-    }
-    process.stdout.removeListener('resize', onResize);
-    process.removeListener('exit', exitReset);
-    if (regionActive) {
-      ctx.io.writeOut(closingCard ? `\x1b[r\x1b[${pinnedHeight + 1};1H\x1b[J` : '\x1b[r');
-      regionActive = false;
-      pinnedHeight = 0;
-    }
-  }
-
+  // The logo is a scrollback-friendly introduction, never a permanent scroll
+  // region. A single inline surface owns all subsequent interactive redraws.
   if (!ctx.json) {
-    const width =
-      process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
-    const rows = process.stdout.rows ?? 24;
-    const height = bannerHeight(width);
-    // Animation gates on the REAL stdout (a captured test io never animates)
-    // and an enabled theme (level 0 covers NO_COLOR, TERM=dumb, mono, pipes).
-    const canAnimate =
-      process.stdout.isTTY === true &&
-      theme.level > 0 &&
-      process.env['SELORA_NO_ANIMATE'] === undefined;
-    // Pinning additionally needs working room beneath the banner (tips, the
-    // prompt block, a few reply rows) — otherwise the classic screen.
-    const pin = canAnimate && rows >= height + MIN_REGION_ROWS;
-
-    if (pin) {
-      // Take over the screen: clear + home, then the intro sweep at the top.
-      ctx.io.writeOut('\x1b[2J\x1b[H');
-      ambientWidth = width;
-      pinnedHeight = height;
-      ambientScene = height > 1 ? makeLogoScene(width, Math.random) : null;
-      const sweep = Array.from({ length: STARTUP_FRAME_COUNT }, (_, k) =>
-        ambientScene !== null
-          ? renderSceneFrame(
-              ambientScene,
-              theme,
-              sweepPhase(k, STARTUP_FRAME_COUNT),
-              k - (STARTUP_FRAME_COUNT - 1),
-            )
-          : renderCompactFrame(theme, width, sweepPhase(k, STARTUP_FRAME_COUNT)),
-      );
-      await playFrames(sweep, { write: ctx.io.writeOut, sleep });
-      // The transcript region: everything below the banner scrolls, the
-      // banner stays. The tips are the region's first content — honestly
-      // transient, they scroll away with the conversation.
-      ctx.io.writeOut(`\x1b[${height + 1};${rows}r\x1b[${height + 1};1H`);
-      regionActive = true;
-      process.once('exit', exitReset);
-      process.stdout.on('resize', onResize);
-      for (const line of startupTail(theme, { width })) r.line(line);
-      let tick = 0;
-      ambientTimer = setInterval(() => {
-        tick += 1;
-        ambientBurst(tick);
-      }, AMBIENT_INTERVAL_MS);
-      ambientTimer.unref?.();
-    } else {
-      const frames = renderStartupFrames(theme, { width });
-      const animate = canAnimate && rows >= frames[0]!.length + 2;
-      if (animate) {
-        await playFrames(frames, { write: ctx.io.writeOut, sleep });
-      } else {
-        // The final frame — the same pure output the animation lands on.
-        for (const line of frames[frames.length - 1]!) r.line(line);
-      }
-    }
+    const width = Math.max(1, (process.stdout.columns || 80) - 1);
+    for (const line of renderStartupScreen(theme, { width })) r.line(line);
+  }
+  function unpin(_closingCard = false): void {
+    view?.dispose();
+    input?.detach();
+    surface?.dispose();
+    process.stdout.removeListener('resize', resizeInput);
+  }
+  function resizeInput(): void {
+    surface?.resize();
+    input?.refresh();
   }
 
   // Turn state — declared before the echo writer, which reads it per write.
@@ -608,7 +479,7 @@ export async function runChat(
     stdinRawCapable: rawCapable(ctx.io.stdin),
     env: process.env,
   });
-  const wire = menuOn ? new PassThrough() : null;
+  const wire = usePromptInput || menuOn ? new PassThrough() : null;
   if (wire !== null) {
     // readline toggles raw mode on ITS input (constructor/resume/close) —
     // delegate to the real stdin so the terminal stays per-key, exactly like
@@ -633,7 +504,7 @@ export async function runChat(
   const rl = readline.createInterface({
     input: wire ?? ctx.io.stdin,
     output: echo,
-    terminal: ctx.io.isTTY,
+    terminal: ctx.io.isTTY && !usePromptInput,
   });
   // The trust screen's picker pauses stdin on cleanup (a flowing raw tty keeps
   // node alive otherwise). Readline on a paused stream never emits 'line' —
@@ -654,7 +525,7 @@ export async function runChat(
   // by /plan; survives mode switches by living outside the loop.
   const planProposals: string[] = [];
   let router: PromptRouter | undefined;
-  if (wire !== null) {
+  if (wire !== null && !usePromptInput) {
     router = new PromptRouter({
       stdin: ctx.io.stdin,
       rl,
@@ -675,7 +546,8 @@ export async function runChat(
   /** A dim UI notice on the UI channel (stderr) — never the reply channel. */
   const note = (text: string): void => {
     // Mid-turn the spinner may own the row — yield it, never glue onto it.
-    arbiter.uiLine(theme.dim(text));
+    if (surface) surface.writeOutput(theme.dim(text));
+    else arbiter.uiLine(theme.dim(text));
   };
 
   // v0.9: at most ONE line queues behind a running turn. The first typed-ahead
@@ -687,7 +559,7 @@ export async function runChat(
   // typed-ahead, piped bursts) keep the v0.8 behavior: queued in order.
   // v1.2.1: mid-turn lines queue as silent (their echo was swallowed); the
   // REPL replays them as a `❯ …` row when they actually run.
-  rl.on('line', (line: string) => {
+  const receiveLine = (line: string): void => {
     const w = waiters.shift();
     if (w !== undefined) {
       w.resolve({ text: line, silent: false });
@@ -710,7 +582,8 @@ export async function runChat(
       return;
     }
     queued.push({ text: line, silent: false });
-  });
+  };
+  rl.on('line', receiveLine);
   const closeLines = (): void => {
     closed = true;
     while (waiters.length > 0) {
@@ -757,9 +630,14 @@ export async function runChat(
     );
     let answer = '';
     try {
-      answer = (await nextLine()).trim().toLowerCase();
+      if (usePromptInput) {
+        const picked = await pickFromList('Resume the previous conversation?', [
+          { label: 'Resume saved session' }, { label: 'Start fresh' },
+        ], 0, { stdin: ctx.io.stdin, write: ctx.io.writeErr, pauseInput: () => {}, resumeInput: () => {}, theme });
+        answer = picked === 0 ? 'y' : 'n';
+      } else answer = (await nextLine()).trim().toLowerCase();
     } catch {
-      answer = ''; // prompt closed (Ctrl+D) — start fresh
+      answer = '';
     }
     if (answer === 'y' || answer === 'yes') resumed = savedChat;
   }
@@ -818,6 +696,7 @@ export async function runChat(
   // so the prompt keeps per-key editing. (v0.6 left the REPL cooked after
   // the first permission menu; the menu engine needs per-key delivery.)
   const resumeInputRaw = (): void => {
+    if (input) { input.resume(); surface?.resume(); return; }
     rl.resume();
     try {
       (ctx.io.stdin as { setRawMode?(m: boolean): void }).setRawMode?.(true);
@@ -849,8 +728,8 @@ export async function runChat(
               askerLineWaits -= 1;
             }
           },
-          pauseInput: () => rl.pause(),
-          resumeInput: menuOn ? resumeInputRaw : () => rl.resume(),
+          pauseInput: () => { if (input) { input.pause(); surface?.suspend(); } else rl.pause(); },
+          resumeInput: usePromptInput || menuOn ? resumeInputRaw : () => rl.resume(),
           rawWrite: ctx.io.writeErr,
           style: {
             marker: (s) => theme.cyan(s),
@@ -875,6 +754,7 @@ export async function runChat(
     // the next full prompt draw shows the new mode instead). DECSC/DECRC
     // save/restore, the universally supported pair.
     const w = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
+    if (input) { input.refresh(); return; }
     if (rl.line.length + 2 < w) {
       ctx.io.writeErr(`\x1b7\x1b[1A\r\x1b[2K${theme.dim(modeStatusLine(mode))}\x1b8`);
     }
@@ -885,7 +765,7 @@ export async function runChat(
     if (s !== '\x1b[Z') return;
     cycleMode();
   };
-  if (!menuOn && !ctx.json && !safeMode) ctx.io.stdin.on('data', onShiftTab);
+  if (!usePromptInput && !menuOn && !ctx.json && !safeMode) ctx.io.stdin.on('data', onShiftTab);
   const detachShiftTab = (): void => {
     ctx.io.stdin.removeListener('data', onShiftTab);
   };
@@ -952,7 +832,7 @@ export async function runChat(
         renderDiff,
         onSubEvent: (line) => {
           try {
-            ctx.io.writeErr(`${theme.dim(line)}\n`);
+            uiIo.writeErr(`${theme.dim(line)}\n`);
           } catch {
             // the channel hiccuped — sub lines are best-effort
           }
@@ -984,7 +864,7 @@ export async function runChat(
   // the row and let the spinner's next tick redraw below them.
   const arbiter = new SpinnerArbiter(() => spinner, ctx.io.writeErr);
   // The spinner redraws a line in place — only meaningful on a real TTY.
-  const spinnerAllowed = process.stderr.isTTY === true && !ctx.json;
+  const spinnerAllowed = process.stderr.isTTY === true && !ctx.json && !usePromptInput;
 
   // ------------------------------------------------------------------
   // v1.3: the diff review pipeline. write_file/edit_file dry runs carry a
@@ -1052,7 +932,9 @@ export async function runChat(
     secrets: readonly SecretFinding[],
     conflict: string | undefined,
   ): void => {
-    for (const line of renderFileDiff(fd, theme, diffRenderOpts())) arbiter.uiLine(line);
+    const lines = renderFileDiff(fd, theme, diffRenderOpts());
+    if (surface) surface.writeOutput(lines.join('\n'));
+    else for (const line of lines) arbiter.uiLine(line);
     for (const s of secrets) {
       arbiter.uiLine(
         theme.warning(`⚠ possible secret on line ${s.line} (${s.rule}): ${s.snippet}`),
@@ -1156,8 +1038,8 @@ export async function runChat(
                     askerLineWaits -= 1;
                   }
                 },
-                pauseInput: () => rl.pause(),
-                resumeInput: menuOn ? resumeInputRaw : () => rl.resume(),
+                pauseInput: () => { if (input) { input.pause(); surface?.suspend(); } else rl.pause(); },
+                resumeInput: usePromptInput || menuOn ? resumeInputRaw : () => rl.resume(),
               },
               { mode: 'ask', theme, render: diffRenderOpts() },
             );
@@ -1192,8 +1074,9 @@ export async function runChat(
    * mode status line, and the gradient ❯ marker the user types after.
    */
   function drawPrompt(): void {
+    if (input) { input.prompt(); return; }
     const tokens = sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : '';
-    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd()}${tokens}\n`));
+    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd(cwd)}${tokens}\n`));
     ctx.io.writeErr(`${theme.dim(modeStatusLine(safeMode ? 'safe' : mode))}\n`);
     // v1.2: the context meter — estimated tokens vs the budget, gradient fill
     // turning warning/error as it fills. TTY only (raw escapes + noise).
@@ -1221,6 +1104,7 @@ export async function runChat(
    * lines on every empty line is what made them look duplicated.
    */
   function drawBarePrompt(): void {
+    if (input) { input.prompt(); return; }
     ctx.io.writeErr(`${theme.gradient('❯')} `);
   }
 
@@ -1300,7 +1184,7 @@ export async function runChat(
             {
               stdin: ctx.io.stdin,
               write: ctx.io.writeErr,
-              pauseInput: () => rl.pause(),
+              pauseInput: () => { if (input) { input.pause(); surface?.suspend(); } else rl.pause(); },
               resumeInput: resumeInputRaw,
               theme,
             },
@@ -1367,6 +1251,7 @@ export async function runChat(
       description: 'clear the conversation history',
       run: () => {
         history.length = 0;
+        sentPrompts.length = 0;
         // Clear the saved session too — "clear" must not resurrect on resume.
         persistSession();
         r.bullet('History cleared.');
@@ -1572,6 +1457,38 @@ export async function runChat(
     return outcome === 'exit' ? 'exit' : 'handled';
   };
 
+  if (usePromptInput) {
+    surface = new TerminalSurface({
+      write: ctx.io.writeErr,
+      cols: () => process.stdout.columns || 80,
+      rows: () => process.stdout.rows || 24,
+    });
+    view = new ConversationView(surface, () => theme, () => termWidth());
+    input = new PromptInput({
+      stdin: ctx.io.stdin, surface, theme: () => theme,
+      cols: () => process.stdout.columns || 80,
+      rows: () => process.stdout.rows || 24,
+      footer: () => [
+        `${current.id} · ${shortCwd(cwd)}${sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : ''}`,
+        modeStatusLine(safeMode ? 'safe' : mode),
+        'Enter send · Shift+Enter / Ctrl+J newline · Esc stop · Ctrl+D exit',
+      ],
+      commands: () => slashCommands,
+      history: () => collectPromptHistory(cwd, sentPrompts), cwd,
+      onSubmit: receiveLine,
+      onInterrupt: () => {
+        if (currentShellKill) currentShellKill();
+        else if (currentAbort) currentAbort.abort();
+        else if (input?.line) input.setValue('');
+        else { closeLines(); }
+      },
+      onExit: () => { currentAbort?.abort(); currentShellKill?.(); closeLines(); },
+      onMode: () => cycleModeRef.fn?.(),
+    });
+    input.attach();
+    process.stdout.on('resize', resizeInput);
+  }
+
   // fullPrompt: the status lines print once per real turn; an empty line
   // reprompts bare. promptActive gates the shift+tab mode cycling.
   let fullPrompt = true;
@@ -1588,8 +1505,10 @@ export async function runChat(
     } finally {
       promptActive = false;
     }
-    const line = entry.text;
-    if (entry.silent) {
+    const line = restorePromptPaste(entry.text);
+    if (input) {
+      if (line.trim() !== '') view?.user(line);
+    } else if (entry.silent) {
       // Queued mid-turn, never echoed (the spinner owned the row) — replay the
       // line now so the transcript shows exactly what is running. The prompt
       // marker itself is already on the row (drawn before the await).
@@ -1638,7 +1557,7 @@ export async function runChat(
         currentShellKill = null;
       }
       for (const outLine of renderShellBlock(shellResult, theme)) {
-        ctx.io.writeErr(`${outLine}\n`);
+        uiIo.writeErr(`${outLine}\n`);
       }
       continue;
     }
@@ -1657,7 +1576,7 @@ export async function runChat(
     // A chat turn: the agent loop with the full in-memory history.
     for (const img of parsed.images) {
       // The transcript marker — base64 NEVER prints.
-      ctx.io.writeOut(`${theme.dim(imageMarker(img))}\n`);
+      uiIo.writeOut(`${theme.dim(imageMarker(img))}\n`);
     }
     history.push({ role: 'user', content: userMessageContent(parsed.text, parsed.images) });
     // The Ctrl+R pool (v0.9): the RAW line as typed, so a re-inserted prompt
@@ -1671,6 +1590,10 @@ export async function runChat(
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
     const md = new MarkdownStream(markdownStyleFor(theme));
+    const transcript = new TranscriptStore();
+    const preTurnHistory = history.slice(0, -1);
+    let checkpoint: ChatMessage[] | undefined;
+    const assistantMessageId = `assistant:${sessionRequests + 1}`;
     // v0.9 stability: a renderer fault degrades the turn to raw text with a
     // one-line notice — it can NEVER kill the REPL.
     let mdBroken = false;
@@ -1722,6 +1645,7 @@ export async function runChat(
           const compaction = await maybeCompact(history, client, {
             tokens: contextTokens,
             compactModel: compactModel ?? current.id,
+            signal: controller.signal,
           });
           if (compaction.compacted) {
             history.length = 0;
@@ -1738,7 +1662,7 @@ export async function runChat(
           if (spinnerAllowed) ctx.io.writeErr('\r\x1b[2K');
         }
       }
-      if (spinnerAllowed) spinner.start();
+      view?.thinking('Thinking…');
       const result = await runAgentLoop({
         client,
         model: current.id,
@@ -1767,8 +1691,22 @@ export async function runChat(
           },
         },
         callbacks: {
-          onDelta: (text) => {
+          onEvent: (event) => view?.event(event),
+          onHistorySnapshot: (messages) => {
+            checkpoint = messages;
+            history.splice(0, history.length, ...messages);
+            persistSession();
+          },
+          onDelta: (text, eventId) => {
+            if (view) return;
             try {
+              const visibleText = transcript.append(
+                assistantMessageId,
+                'assistant',
+                text,
+                eventId === undefined ? undefined : `${assistantMessageId}:${eventId}`,
+              );
+              if (visibleText === '') return;
               // Content ALWAYS owns the row: stop the spinner on EVERY delta,
               // not just the first — thinking models interleave reasoning
               // deltas between paragraphs and onReasoning re-arms the spinner
@@ -1776,10 +1714,10 @@ export async function runChat(
               // `✦ Thinking…` onto the reply text (the v1.2 corruption).
               arbiter.stopForContent();
               if (mdBroken) {
-                r.writeRaw(`${text}\n`);
+                r.writeRaw(`${visibleText}\n`);
                 return;
               }
-              const rendered = md.push(text);
+              const rendered = md.push(visibleText);
               if (rendered !== '') r.writeRaw(`${rendered}\n`); // stdout, live
             } catch {
               mdBroken = true;
@@ -1800,6 +1738,7 @@ export async function runChat(
             }
           },
           onToolStart: (name, label) => {
+            if (view) return;
             arbiter.stopForContent();
             try {
               ctx.io.writeErr(`${renderToolStart(name, label, theme)}\n`);
@@ -1812,6 +1751,7 @@ export async function runChat(
           // tool rows so they read as a transcript of what happened. The
           // spinner may own the row — yield it, never glue onto it.
           onActivity: (line) => {
+            if (view) return;
             try {
               arbiter.uiLine(theme.dim(line));
             } catch {
@@ -1819,6 +1759,7 @@ export async function runChat(
             }
           },
           onToolResult: (info) => {
+            if (view) return;
             try {
               for (const outLine of renderToolResult(
                 {
@@ -1839,6 +1780,7 @@ export async function runChat(
             if (spinnerAllowed) spinner.start();
           },
           onTurnComplete: (totals) => {
+            if (view) { view.usage(totals); input?.refresh(); return; }
             // The stream phase is over — stop the spinner BEFORE the flush and
             // the footer, so neither can land on its row (a turn that ends on
             // reasoning deltas would otherwise glue the footer to it).
@@ -1854,6 +1796,7 @@ export async function runChat(
           },
         },
       });
+      transcript.apply({ type: 'complete', id: assistantMessageId });
       const tail = safeFlush(); // normally '' — onTurnComplete flushed already
       if (tail !== '') r.writeRaw(`${tail}\n`);
 
@@ -1862,6 +1805,11 @@ export async function runChat(
       history.push(...result.messages);
       // Crash-safe: the completed turn is on disk from this moment.
       persistSession();
+      view?.finish();
+      if (view) {
+        const footer = chatFooterLine(result.usageTotal, result.chargeTotal);
+        if (footer !== undefined) r.gray(footer);
+      }
       sessionRequests += 1;
       if (result.usageTotal !== undefined) sessionTokens += result.usageTotal.totalTokens;
       if (result.chargeTotalMicro !== undefined) {
@@ -1901,8 +1849,10 @@ export async function runChat(
       }
     } catch (err) {
       spinner.stop();
-      // The failed turn is dropped entirely — the user can retype it.
-      history.pop();
+      view?.finish();
+      // Preserve wire-valid completed tool effects, not an unmatched user/stream.
+      history.splice(0, history.length, ...(checkpoint ?? preTurnHistory));
+      if (checkpoint !== undefined) persistSession();
       if (err instanceof SeloraApiError && err.kind === 'cancelled') {
         // Ctrl+C also drops the one queued prompt (v0.9) — an aborted turn
         // must never roll into a line the user typed for a context that no
@@ -1931,6 +1881,8 @@ export async function runChat(
     } finally {
       spinner.stop();
       currentAbort = null;
+      view?.finish();
+      input?.refresh();
     }
   }
 

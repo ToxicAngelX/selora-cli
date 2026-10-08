@@ -14,6 +14,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { loadProjectConfig } from '../../config/project.js';
 import type { Tool, ToolResult } from '../tool.js';
 
@@ -137,6 +138,7 @@ export const runCommandTool: Tool = {
       timeoutMs = v;
     }
 
+    if (ctx.signal?.aborted === true) return badShape('run_command: cancelled');
     if (ctx.dryRun) {
       return {
         ok: true,
@@ -158,6 +160,7 @@ export const runCommandTool: Tool = {
         cwd: ctx.cwd,
         timeoutMs,
         display: command,
+        signal: ctx.signal,
       });
     }
 
@@ -171,6 +174,7 @@ export const runCommandTool: Tool = {
       cwd: ctx.cwd,
       timeoutMs,
       display: command,
+      signal: ctx.signal,
     });
   },
 };
@@ -181,6 +185,7 @@ interface ExecCaptureArgs {
   cwd: string;
   timeoutMs: number;
   display: string;
+  signal?: AbortSignal | undefined;
 }
 
 /** spawn + capture with timeout and 8 KB-per-stream caps. Never throws. */
@@ -188,7 +193,12 @@ async function execCapture(a: ExecCaptureArgs): Promise<ToolResult> {
   return new Promise<ToolResult>((resolve) => {
     let child;
     try {
-      child = spawn(a.file, a.args, { cwd: a.cwd, shell: false, windowsHide: true });
+      child = spawn(a.file, a.args, {
+        cwd: a.cwd,
+        shell: false,
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+      });
     } catch (err) {
       resolve(badShape(`run_command: cannot start ${a.display}: ${errText(err)}`));
       return;
@@ -198,37 +208,102 @@ async function execCapture(a: ExecCaptureArgs): Promise<ToolResult> {
     let outTrunc = false;
     let errTrunc = false;
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (out.length < OUTPUT_CAP) {
-        out += chunk.toString('utf8').slice(0, OUTPUT_CAP - out.length);
-        if (out.length >= OUTPUT_CAP) outTrunc = true;
-      } else outTrunc = true;
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (errOut.length < OUTPUT_CAP) {
-        errOut += chunk.toString('utf8').slice(0, OUTPUT_CAP - errOut.length);
+    const append = (which: 'out' | 'err', text: string): void => {
+      if (which === 'out') {
+        if (out.length < OUTPUT_CAP) {
+          out += text.slice(0, OUTPUT_CAP - out.length);
+          if (out.length >= OUTPUT_CAP) outTrunc = true;
+        } else outTrunc = true;
+      } else if (errOut.length < OUTPUT_CAP) {
+        errOut += text.slice(0, OUTPUT_CAP - errOut.length);
         if (errOut.length >= OUTPUT_CAP) errTrunc = true;
       } else errTrunc = true;
-    });
+    };
+    child.stdout?.on('data', (chunk: Buffer) => append('out', outDecoder.write(chunk)));
+    child.stderr?.on('data', (chunk: Buffer) => append('err', errDecoder.write(chunk)));
 
+    const terminate = (): void => {
+      if (process.platform === 'win32') {
+        try {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+            windowsHide: true,
+            shell: false,
+            stdio: 'ignore',
+          });
+          killer.on('error', () => {
+            try {
+              child.kill();
+            } catch {
+              /* exited */
+            }
+          });
+          killer.on('exit', (code) => {
+            if (code !== 0) {
+              try {
+                child.kill();
+              } catch {
+                /* exited */
+              }
+            }
+          });
+        } catch {
+          try {
+            child.kill();
+          } catch {
+            /* exited */
+          }
+        }
+      } else if (child.pid !== undefined) {
+        // Immediate group SIGKILL also covers grandchildren whose stdio is
+        // detached and children which ignore SIGTERM; no grace timer can leak.
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* exited */
+          }
+        }
+      }
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      terminate();
     }, a.timeoutMs);
+    const onAbort = (): void => {
+      cancelled = true;
+      terminate();
+    };
+    if (a.signal !== undefined) {
+      if (a.signal.aborted) onAbort();
+      else a.signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     const finish = (result: ToolResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      a.signal?.removeEventListener('abort', onAbort);
       resolve(result);
     };
 
     child.on('error', (err: Error) => {
+      if (cancelled) return;
       finish(badShape(`run_command: cannot run ${a.display}: ${err.message}`));
     });
     child.on('close', (code: number | null) => {
+      append('out', outDecoder.end());
+      append('err', errDecoder.end());
+      if (cancelled) {
+        finish(badShape(`run_command: cancelled: ${a.display}`));
+        return;
+      }
       if (timedOut) {
         finish(
           badShape(`run_command: timed out after ${Math.round(a.timeoutMs / 1000)}s: ${a.display}`),
@@ -239,14 +314,12 @@ async function execCapture(a: ExecCaptureArgs): Promise<ToolResult> {
       if (out !== '') parts.push(out + (outTrunc ? '\n(… stdout truncated at 8 KB)' : ''));
       if (errOut !== '') parts.push(errOut + (errTrunc ? '\n(… stderr truncated at 8 KB)' : ''));
       const output = parts.join('\n');
-      if (code === 0) {
+      if (code === 0)
         return finish({
           ok: true,
           summary: `ran: ${a.display}${output !== '' ? ` (${output.split('\n').length} lines of output)` : ' (no output)'}`,
           content: output !== '' ? output : '(no output)',
         });
-      }
-      // Non-zero exit is a REAL result, not a tool crash — the model sees it.
       const reason = code !== null ? `exit code ${code}` : 'terminated without an exit code';
       finish({
         ok: false,

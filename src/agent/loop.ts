@@ -24,7 +24,9 @@
  *    helpers — displayed per turn AND cumulatively, real numbers only.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { SeloraClient } from '../api/client.js';
+import { SeloraApiError } from '../api/errors.js';
 import {
   streamChat,
   type ChatMessage,
@@ -33,7 +35,7 @@ import {
   type WireToolDefinition,
 } from '../api/endpoints/chat.js';
 import { parseMoneyMicro, microToWireString } from '../money.js';
-import type { Tool, ToolKind } from './tool.js';
+import { throwIfCancelled, type Tool, type ToolKind } from './tool.js';
 import { grantDirFor } from './userPaths.js';
 import { PLAN_MODE_DENY_REASON } from './modes.js';
 import type { ReviewDecision } from '../diff/types.js';
@@ -65,8 +67,28 @@ export interface AgentUsageTotals {
   totalChargeMicro: bigint | undefined;
 }
 
+export type AgentEvent =
+  | { type: 'assistant-start'; id: string; turn: number }
+  | { type: 'assistant-delta'; id: string; text: string; sequence: number }
+  | { type: 'assistant-complete'; id: string; turn: number; content: string }
+  | { type: 'tool-start'; id: string; callId: string; name: string; label: string }
+  | {
+      type: 'tool-result';
+      id: string;
+      callId: string;
+      name: string;
+      label: string;
+      kind: ToolKind;
+      ok: boolean;
+      summary: string;
+      content?: string | undefined;
+      diff?: readonly string[] | undefined;
+    }
+  | { type: 'status'; id: string; text: string };
+
 export interface AgentLoopCallbacks {
-  onDelta: (text: string) => void;
+  onDelta: (text: string, eventId?: string) => void;
+  onEvent?: ((event: AgentEvent) => void) | undefined;
   onReasoning?: ((text: string) => void) | undefined;
   /** Gray activity line (stderr): "→ read_file(src/index.ts)" etc. */
   onActivity?: ((line: string) => void) | undefined;
@@ -255,9 +277,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
   let usageTotal: ChatUsage | undefined = undefined;
   let chargeTotalMicro: bigint | undefined = undefined;
   const cb = opts.callbacks;
+  const runId = randomUUID();
 
   for (let turn = 1; turn <= opts.maxTurns; turn += 1) {
+    throwIfCancelled(opts.signal);
     let turnContent = '';
+    let sequence = 0;
+    const assistantId = `${runId}:turn:${turn}`;
+    cb.onEvent?.({ type: 'assistant-start', id: assistantId, turn });
     const result = await streamChat(
       opts.client,
       {
@@ -267,15 +294,18 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
         signal: opts.signal,
       },
       {
-        onDelta: (text) => {
+        onDelta: (text, eventId) => {
           turnContent += text;
-          cb.onDelta(text);
+          cb.onEvent?.({ type: 'assistant-delta', id: assistantId, text, sequence: sequence++ });
+          cb.onDelta(text, eventId);
         },
         onReasoning: (text) => {
           cb.onReasoning?.(text);
         },
       },
     );
+
+    cb.onEvent?.({ type: 'assistant-complete', id: assistantId, turn, content: turnContent });
 
     if (result.usage !== undefined) {
       usageTotal =
@@ -308,6 +338,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
 
     if (result.toolCalls.length === 0) {
       history.push({ role: 'assistant', content: turnContent });
+      cb.onHistorySnapshot?.([...history]);
+      throwIfCancelled(opts.signal);
       return finish('completed', turn);
     }
 
@@ -324,26 +356,74 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
       tool_calls: echo,
     });
 
-    for (let callIndex = 0; callIndex < result.toolCalls.length; callIndex += 1) {
-      const call = result.toolCalls[callIndex]!;
-      const outcome = await executeToolCall(opts, permissions, allows, call, history, toolEvents);
-      if (outcome === 'failed') {
-        consecutiveFailures += 1;
-      } else if (outcome === 'succeeded') {
-        consecutiveFailures = 0;
-      } // 'denied' leaves the failure counter untouched
-      if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
-        // Wire-valid stop: parallel calls the breaker skipped still need a
-        // tool message each, or a saved session resumes into a 400.
-        for (const rest of result.toolCalls.slice(callIndex + 1)) {
-          history.push({
-            role: 'tool',
-            tool_call_id: rest.id,
-            content: 'Not executed: the run stopped after 3 consecutive tool failures.',
-          });
+    const batchHistoryStart = history.length;
+    const callCallbacks = result.toolCalls.map((call, index) =>
+      toolCallbacks(cb, `${assistantId}:call:${index}:${call.id}`, call.id, call.name),
+    );
+    try {
+      for (let callIndex = 0; callIndex < result.toolCalls.length; callIndex += 1) {
+        throwIfCancelled(opts.signal);
+        const call = result.toolCalls[callIndex]!;
+        const outcome = await executeToolCall(
+          { ...opts, callbacks: callCallbacks[callIndex]! },
+          permissions,
+          allows,
+          call,
+          history,
+          toolEvents,
+        );
+        throwIfCancelled(opts.signal);
+        if (outcome === 'failed') {
+          consecutiveFailures += 1;
+        } else if (outcome === 'succeeded') {
+          consecutiveFailures = 0;
+        } // 'denied' leaves the failure counter untouched
+        if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+          for (let index = callIndex + 1; index < result.toolCalls.length; index += 1) {
+            recordSkipped(
+              index,
+              'Not executed: the run stopped after 3 consecutive tool failures.',
+            );
+          }
+          cb.onHistorySnapshot?.([...history]);
+          return finish('tool-failures', turn);
         }
-        return finish('tool-failures', turn);
       }
+      throwIfCancelled(opts.signal);
+    } catch (err) {
+      if (
+        opts.signal?.aborted !== true &&
+        !(err instanceof SeloraApiError && err.kind === 'cancelled')
+      ) {
+        throw err;
+      }
+      // Every unanswered call gets an honest cancellation result. No pending
+      // tool runs; already executed effects remain in a wire-valid checkpoint.
+      const completed = history.length - batchHistoryStart;
+      for (let index = completed; index < result.toolCalls.length; index += 1) {
+        recordSkipped(
+          index,
+          'Cancelled: tool execution did not complete; no further tools were executed.',
+        );
+      }
+      cb.onHistorySnapshot?.([...history]);
+      throw new SeloraApiError({ kind: 'cancelled', message: 'Request cancelled.' });
+    }
+
+    function recordSkipped(index: number, summary: string): void {
+      const call = result.toolCalls[index]!;
+      const label = `${call.name}()`;
+      const callbacks = callCallbacks[index]!;
+      history.push({ role: 'tool', tool_call_id: call.id, content: summary });
+      toolEvents.push({ name: call.name, label, ok: false, summary });
+      callbacks.onToolStart?.(call.name, label);
+      callbacks.onToolResult?.({
+        name: call.name,
+        label,
+        kind: opts.tools.find((tool) => tool.name === call.name)?.kind ?? 'exec',
+        ok: false,
+        summary,
+      });
     }
 
     if (turn === opts.maxTurns) {
@@ -377,6 +457,48 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
   }
 }
 
+/** One identity per wire call; compatibility callbacks adapt the event payload. */
+function toolCallbacks(
+  cb: AgentLoopCallbacks,
+  id: string,
+  callId: string,
+  name: string,
+): AgentLoopCallbacks {
+  let started = false;
+  let completed = false;
+  let statusSequence = 0;
+  return {
+    ...cb,
+    onActivity: (text) => {
+      cb.onEvent?.({ type: 'status', id: `${id}:status:${statusSequence++}`, text });
+      cb.onActivity?.(text);
+    },
+    onToolStart: (toolName, label) => {
+      if (started) return;
+      started = true;
+      cb.onEvent?.({ type: 'tool-start', id, callId, name: toolName, label });
+      if (cb.onToolStart !== undefined) cb.onToolStart(toolName, label);
+      else cb.onActivity?.(`→ ${label}`);
+    },
+    onToolResult: (info) => {
+      if (completed) return;
+      completed = true;
+      if (!started) {
+        started = true;
+        cb.onEvent?.({ type: 'tool-start', id, callId, name, label: info.label });
+        if (cb.onToolStart !== undefined) cb.onToolStart(name, info.label);
+        else cb.onActivity?.(`→ ${info.label}`);
+      }
+      cb.onEvent?.({ type: 'tool-result', id, callId, ...info });
+      if (cb.onToolResult !== undefined) cb.onToolResult(info);
+      else {
+        const denied = info.summary === 'denied by user' || info.summary.startsWith('plan mode:');
+        cb.onActivity?.(`${info.ok || denied ? '·' : '✗'} ${info.summary}`);
+      }
+    },
+  };
+}
+
 type CallOutcome = 'succeeded' | 'failed' | 'denied';
 
 async function executeToolCall(
@@ -388,6 +510,7 @@ async function executeToolCall(
   toolEvents: AgentToolEvent[],
 ): Promise<CallOutcome> {
   const { cwd, callbacks: cb } = opts;
+  throwIfCancelled(opts.signal);
   const reply = (text: string): void => {
     history.push({ role: 'tool', tool_call_id: call.id, content: text });
   };
@@ -395,9 +518,15 @@ async function executeToolCall(
   const tool = opts.tools.find((t) => t.name === call.name);
   if (tool === undefined) {
     const available = opts.tools.map((t) => t.name).join(', ');
-    cb.onActivity?.(`→ ${call.name}() — no such tool`);
+    cb.onToolStart?.(call.name, `${call.name}() — no such tool`);
     const text = `Unknown tool "${call.name}". Available tools: ${available}.`;
-    cb.onActivity?.(`✗ ${text}`);
+    cb.onToolResult?.({
+      name: call.name,
+      label: `${call.name}()`,
+      kind: 'exec',
+      ok: false,
+      summary: text,
+    });
     reply(text);
     toolEvents.push({ name: call.name, label: `${call.name}()`, ok: false, summary: text });
     return 'failed';
@@ -413,8 +542,13 @@ async function executeToolCall(
       parsed = rec(JSON.parse(argsRaw));
     } catch (err) {
       const text = `Invalid tool arguments for ${call.name}: not valid JSON (${errText(err)}).`;
-      cb.onActivity?.(`→ ${tool.name}(…) — invalid arguments`);
-      cb.onActivity?.(`✗ ${text}`);
+      cb.onToolResult?.({
+        name: tool.name,
+        label: `${tool.name}()`,
+        kind: tool.kind,
+        ok: false,
+        summary: text,
+      });
       reply(text);
       toolEvents.push({ name: tool.name, label: `${tool.name}()`, ok: false, summary: text });
       return 'failed';
@@ -422,7 +556,13 @@ async function executeToolCall(
   }
   if (parsed === null) {
     const text = `Invalid tool arguments for ${tool.name}: expected a JSON object.`;
-    cb.onActivity?.(`✗ ${text}`);
+    cb.onToolResult?.({
+      name: tool.name,
+      label: `${tool.name}()`,
+      kind: tool.kind,
+      ok: false,
+      summary: text,
+    });
     reply(text);
     toolEvents.push({ name: tool.name, label: `${tool.name}()`, ok: false, summary: text });
     return 'failed';
@@ -430,7 +570,6 @@ async function executeToolCall(
 
   const input: Record<string, unknown> = parsed;
   const label = tool.permissionLabel(input);
-  cb.onActivity?.(`→ ${label}`);
   cb.onToolStart?.(tool.name, label);
 
   // Plan mode (v0.9): a mutating tool is NEVER executed — not even dry-run
@@ -441,7 +580,6 @@ async function executeToolCall(
   if (opts.planGate !== undefined && opts.planGate.isPlanMode() && tool.kind !== 'read') {
     opts.planGate.onProposal(label);
     const summary = 'plan mode: proposal recorded — not executed';
-    cb.onActivity?.(`· ${summary}`);
     cb.onToolResult?.({ name: tool.name, label, kind: tool.kind, ok: false, summary });
     reply(`Permission denied by user. Reason: ${PLAN_MODE_DENY_REASON}`);
     toolEvents.push({ name: tool.name, label, ok: false, summary });
@@ -453,9 +591,8 @@ async function executeToolCall(
   // mode is honest even under --yes: the proposed change (preview + styled
   // diff) is shown and the model is told plainly that nothing was written.
   if (opts.dryRun === true && tool.kind !== 'read') {
-    const dry = await tool.run(input, { cwd, dryRun: true, outsideDirs: allows.outsideDirs() });
+    const dry = await previewTool(input, allows.outsideDirs());
     if (!dry.ok) {
-      cb.onActivity?.(`✗ ${dry.summary}`);
       cb.onToolResult?.({
         name: tool.name,
         label,
@@ -472,7 +609,6 @@ async function executeToolCall(
         ? opts.renderDiff?.(dry.diff.before, dry.diff.after, dry.diff.path)
         : undefined;
     const summary = `[dry-run] ${dry.summary}`;
-    cb.onActivity?.(`· ${summary}`);
     cb.onToolResult?.({
       name: tool.name,
       label,
@@ -498,7 +634,7 @@ async function executeToolCall(
     // --yes auto-approves everything the toolset allows — including outside
     // access: a quick dry run detects it, the dir is granted in-session, and
     // the real run proceeds (one dry run, no prompt, nothing persisted).
-    const probe = await tool.run(input, { cwd, dryRun: true, outsideDirs: allows.outsideDirs() });
+    const probe = await previewTool(input, allows.outsideDirs());
     if (probe.outside !== undefined) allows.rememberDir(grantDirFor(probe.outside.abs));
     return await runApproved(tool, input, label, reply, toolEvents, cb, opts, allows.outsideDirs());
   }
@@ -507,9 +643,8 @@ async function executeToolCall(
   // {ok:false} dry run (bad path, missing file, …) never even prompts.
   let preview: string | undefined = undefined;
   let styledDiff: readonly string[] | undefined = undefined;
-  const dry = await tool.run(input, { cwd, dryRun: true, outsideDirs: allows.outsideDirs() });
+  const dry = await previewTool(input, allows.outsideDirs());
   if (!dry.ok) {
-    cb.onActivity?.(`✗ ${dry.summary}`);
     cb.onToolResult?.({ name: tool.name, label, kind: tool.kind, ok: false, summary: dry.summary });
     reply(dry.summary);
     toolEvents.push({ name: tool.name, label, ok: false, summary: dry.summary });
@@ -542,7 +677,9 @@ async function executeToolCall(
       outsidePath: dry.outside.abs,
       diff: styledDiff,
     };
+    throwIfCancelled(opts.signal);
     const answer = await ask(permissions, req);
+    throwIfCancelled(opts.signal);
     // Only explicit approvals proceed — a stray 'edit' answer (the line-based
     // prompt maps 'e' even though outside asks never offer it) denies safely.
     if (answer.decision !== 'allow' && answer.decision !== 'allow-session') {
@@ -582,7 +719,9 @@ async function executeToolCall(
         dry.diff.kind ?? (dry.diff.before === '' ? ('created' as const) : ('modified' as const)),
       label,
     };
+    throwIfCancelled(opts.signal);
     const decision = await hooks.review(change);
+    throwIfCancelled(opts.signal);
     switch (decision.action) {
       case 'apply':
         return await applyReviewed(hooks, tool, label, change, undefined);
@@ -603,6 +742,13 @@ async function executeToolCall(
 
   return await promptLoop(tool, input, label, preview, styledDiff, allows.outsideDirs());
 
+  async function previewTool(input: Record<string, unknown>, outsideDirs: readonly string[]) {
+    throwIfCancelled(opts.signal);
+    const preview = await tool!.run(input, { cwd, dryRun: true, outsideDirs, signal: opts.signal });
+    throwIfCancelled(opts.signal);
+    return preview;
+  }
+
   /** Execute an approved review decision through the guarded writer. */
   async function applyReviewed(
     hooks: FileChangeHooks,
@@ -617,8 +763,8 @@ async function executeToolCall(
     },
     acceptedHunks: readonly number[] | undefined,
   ): Promise<CallOutcome> {
+    throwIfCancelled(opts.signal);
     const applied = await hooks.apply(change, acceptedHunks);
-    cb.onActivity?.(applied.ok ? `· ${applied.summary}` : `✗ ${applied.summary}`);
     cb.onToolResult?.({
       name: tool.name,
       label,
@@ -628,6 +774,7 @@ async function executeToolCall(
     });
     reply(applied.summary);
     toolEvents.push({ name: tool.name, label, ok: applied.ok, summary: applied.summary });
+    throwIfCancelled(opts.signal);
     return applied.ok ? 'succeeded' : 'failed';
   }
 
@@ -649,7 +796,9 @@ async function executeToolCall(
         diff: styledDiff,
         neverAlways: tool.neverAutoAllow === true,
       };
+      throwIfCancelled(opts.signal);
       const answer = await ask(permissions, req);
+      throwIfCancelled(opts.signal);
       if (answer.decision === 'deny') {
         return denied(tool, label, answer.reason, cb, reply, toolEvents);
       }
@@ -661,19 +810,33 @@ async function executeToolCall(
         return await runApproved(tool, input, label, reply, toolEvents, cb, opts, outsideDirs);
       }
       // 'edit' (exec tools only): replace the command, dry-run, ask again.
+      throwIfCancelled(opts.signal);
       const replacement = await permissions.replacement(String(input['command'] ?? ''));
+      throwIfCancelled(opts.signal);
       if (replacement === null) {
         cb.onActivity?.('· edit cancelled — treating as no');
+        cb.onToolResult?.({
+          name: tool.name,
+          label,
+          kind: tool.kind,
+          ok: false,
+          summary: 'denied by user',
+        });
         reply('Permission denied by user.');
         toolEvents.push({ name: tool.name, label, ok: false, summary: 'denied by user' });
         return 'denied';
       }
       input = { ...input, command: replacement };
       label = tool.permissionLabel(input);
-      cb.onActivity?.(`→ ${label}`);
-      const reDry = await tool.run(input, { cwd, dryRun: true, outsideDirs });
+      const reDry = await previewTool(input, outsideDirs);
       if (!reDry.ok) {
-        cb.onActivity?.(`✗ ${reDry.summary}`);
+        cb.onToolResult?.({
+          name: tool.name,
+          label,
+          kind: tool.kind,
+          ok: false,
+          summary: reDry.summary,
+        });
         reply(reDry.summary);
         toolEvents.push({ name: tool.name, label, ok: false, summary: reDry.summary });
         return 'failed';
@@ -705,7 +868,6 @@ function denied(
   reply: (text: string) => void,
   toolEvents: AgentToolEvent[],
 ): CallOutcome {
-  cb.onActivity?.('· denied by user');
   cb.onToolResult?.({
     name: tool.name,
     label,
@@ -733,9 +895,13 @@ async function runApproved(
   outsideDirs: readonly string[],
 ): Promise<CallOutcome> {
   const freshLabel = tool.permissionLabel(input);
-  if (freshLabel !== label) cb.onActivity?.(`→ ${freshLabel}`);
-  const result = await tool.run(input, { cwd: opts.cwd, dryRun: false, outsideDirs });
-  cb.onActivity?.(result.ok ? `· ${result.summary}` : `✗ ${result.summary}`);
+  throwIfCancelled(opts.signal);
+  const result = await tool.run(input, {
+    cwd: opts.cwd,
+    dryRun: false,
+    outsideDirs,
+    signal: opts.signal,
+  });
   const styledDiff =
     result.diff !== undefined
       ? opts.renderDiff?.(result.diff.before, result.diff.after, result.diff.path)
@@ -761,6 +927,7 @@ async function runApproved(
   });
   reply(result.content ?? result.summary);
   toolEvents.push({ name: tool.name, label: freshLabel, ok: result.ok, summary: result.summary });
+  throwIfCancelled(opts.signal);
   return result.ok ? 'succeeded' : 'failed';
 }
 

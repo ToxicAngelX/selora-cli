@@ -17,6 +17,8 @@
  *    ({"type":"function","function":{name,description,parameters}}).
  */
 
+import { SeloraApiError } from '../api/errors.js';
+
 /** Permission class — read tools are prompt-only, write/exec show previews. */
 export type ToolKind = 'read' | 'write' | 'exec';
 
@@ -31,6 +33,15 @@ export interface ToolContext {
    * can ask. Absent/empty = no outside access granted yet.
    */
   outsideDirs?: readonly string[];
+  /** Abort signal for the current agent turn/tool sequence. */
+  signal?: AbortSignal | undefined;
+}
+
+/** Throw the loop's canonical cancellation error when work should stop. */
+export function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted === true) {
+    throw new SeloraApiError({ kind: 'cancelled', message: 'Request cancelled.' });
+  }
 }
 
 export interface ToolResult {

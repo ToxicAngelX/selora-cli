@@ -42,6 +42,8 @@ import type { Interface } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import type { Theme } from './theme.js';
 import { isImagePath } from '../images.js';
+import { terminalTextWidth, truncateTerminalText } from './terminal-text.js';
+import { encodePromptPaste } from './promptbar.js';
 
 // ---------------------------------------------------------------------------
 // slash commands (the registry — /help, the menu, and dispatch share it)
@@ -384,9 +386,9 @@ export class MenuModel {
 // row rendering (pure — styled strings, width-clamped)
 // ---------------------------------------------------------------------------
 
-/** Visible length, code-point based (good enough for row clamping). */
+/** Visible terminal-cell width, excluding styling/control sequences. */
 function visibleWidth(s: string): number {
-  return Array.from(s).length;
+  return terminalTextWidth(s);
 }
 
 /**
@@ -413,14 +415,11 @@ export function renderMenuRows(model: MenuModel, theme: Theme, maxWidth: number)
     let label = item.label;
     if (isHistory) {
       const labelBudget = maxWidth - visibleWidth(marker);
-      const points = Array.from(label);
-      if (points.length > labelBudget) {
-        label = `${points.slice(0, Math.max(0, labelBudget - 1)).join('')}…`;
-      }
+      label = truncateTerminalText(label, labelBudget);
     }
     const budget = maxWidth - visibleWidth(marker) - visibleWidth(label);
     if (hint !== '' && visibleWidth(hint) > budget) {
-      hint = budget > 1 ? `${hint.slice(0, Math.max(0, budget - 1))}…` : '';
+      hint = budget > 1 ? truncateTerminalText(hint, budget) : '';
     }
     const labelStyled =
       item.kind === 'dir'
@@ -570,10 +569,11 @@ export interface PromptRouterDeps {
 const NAV_UP = ['\x1b[A', '\x1bOA'];
 const NAV_DOWN = ['\x1b[B', '\x1bOB'];
 const SHIFT_TAB = '\x1b[Z';
+const NEWLINE_SEQUENCES = ['\x1b[13;2u', '\x1b[13;2~', '\x1b[27;2;13~'];
 const CTRL_C = '\x03';
 const CTRL_R = '\x12';
 /** Escape sequences the router acts on (longest-first matching at the head). */
-const KNOWN_SEQUENCES = [...NAV_UP, ...NAV_DOWN, SHIFT_TAB];
+const KNOWN_SEQUENCES = [...NAV_UP, ...NAV_DOWN, SHIFT_TAB, ...NEWLINE_SEQUENCES];
 /** Bytes that begin a router-relevant keypress (ends an ordinary text run). */
 const SPECIAL_STARTS = new Set(['\x1b', CTRL_C, CTRL_R, '\r', '\n', '\t']);
 /** How long a lone ESC (or a split escape prefix) waits for more bytes. */
@@ -672,7 +672,16 @@ export class PromptRouter {
       this.clearHold();
       return;
     }
-    this.pending += typeof chunk === 'string' ? chunk : this.decoder.write(chunk);
+    // Bracketed paste arrives as one raw chunk. Strip the terminal wrappers and
+    // insert embedded newlines directly so readline does not treat them as
+    // submissions.
+    const raw = typeof chunk === 'string' ? chunk : this.decoder.write(chunk);
+    const bracketed = raw.startsWith('\x1b[200~') && raw.endsWith('\x1b[201~');
+    if (bracketed) {
+      if (!rlPaused(this.deps.rl)) this.insertPasted(encodePromptPaste(raw.slice(6, -6)));
+      return;
+    }
+    this.pending += raw;
     this.drain();
   };
 
@@ -769,9 +778,21 @@ export class PromptRouter {
     this.deps.wire.write(s);
   }
 
+  private insertPasted(text: string): void {
+    const rl = rlMutable(this.deps.rl);
+    rl.line = `${rl.line.slice(0, rl.cursor)}${text}${rl.line.slice(rl.cursor)}`;
+    rl.cursor += text.length;
+    this.deps.rl.prompt(true);
+    this.afterForward();
+  }
+
   // -- key handlers ---------------------------------------------------------
 
   private onEscapeSeq(seq: string): void {
+    if (NEWLINE_SEQUENCES.includes(seq)) {
+      this.insertPasted('\n');
+      return;
+    }
     if (NAV_UP.includes(seq)) {
       this.onNav(-1);
       return;
@@ -962,7 +983,7 @@ export class PromptRouter {
   /** The menu only renders while the prompt+line fit on a single row. */
   private fitsOneRow(): boolean {
     const rl = this.deps.rl;
-    return 2 + Array.from(rl.line).length < this.deps.cols();
+    return 2 + terminalTextWidth(rl.line) < this.deps.cols();
   }
 
   private redraw(): void {

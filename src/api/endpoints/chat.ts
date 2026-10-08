@@ -97,9 +97,9 @@ export interface ChatResult {
 
 export interface ChatCallbacks {
   /** Content deltas (choices[0].delta.content), in arrival order. */
-  onDelta: (text: string) => void;
+  onDelta: (text: string, eventId?: string) => void;
   /** reasoning_content deltas — only invoked when the backend sends them. */
-  onReasoning?: ((text: string) => void) | undefined;
+  onReasoning?: ((text: string, eventId?: string) => void) | undefined;
 }
 
 export interface StreamChatOptions {
@@ -176,6 +176,7 @@ export async function streamChat(
     requestId: undefined,
   };
   let done = false;
+  const seenEventIds = new Set<string>();
   // Tool-call fragments keyed by their wire `index`; assembled at stream end.
   const pending = new Map<
     number,
@@ -205,8 +206,12 @@ export async function streamChat(
     }
   };
 
-  const onEvent = (data: string): void => {
+  const onEvent = (data: string, eventId?: string): void => {
     if (done) return;
+    if (eventId !== undefined && eventId !== '') {
+      if (seenEventIds.has(eventId)) return;
+      seenEventIds.add(eventId);
+    }
     if (data === '[DONE]') {
       done = true;
       return;
@@ -244,9 +249,9 @@ export async function streamChat(
             accumulate(delta['tool_calls']);
           }
           const content = nonEmptyStr(delta, 'content');
-          if (content !== undefined) callbacks.onDelta(content);
+          if (content !== undefined) callbacks.onDelta(content, eventId);
           const reasoning = nonEmptyStr(delta, 'reasoning_content');
-          if (reasoning !== undefined) callbacks.onReasoning?.(reasoning);
+          if (reasoning !== undefined) callbacks.onReasoning?.(reasoning, eventId);
         } else {
           // Non-streaming fallback shape: the whole completion in one payload.
           const message = rec(choice['message']);
@@ -262,7 +267,7 @@ export async function streamChat(
               }
             }
             const content = nonEmptyStr(message, 'content');
-            if (content !== undefined) callbacks.onDelta(content);
+            if (content !== undefined) callbacks.onDelta(content, eventId);
           }
         }
       }

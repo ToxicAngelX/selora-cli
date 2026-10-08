@@ -18,7 +18,7 @@ export interface SseParser {
   flush(): void;
 }
 
-export function createSseParser(onEvent: (data: string) => void): SseParser {
+export function createSseParser(onEvent: (data: string, id?: string) => void): SseParser {
   /** Buffer of already-normalized text not yet split into a complete event. */
   let buf = '';
   /** The previous chunk ended with '\r' — it may be half of a '\r\n' pair. */
@@ -30,18 +30,21 @@ export function createSseParser(onEvent: (data: string) => void): SseParser {
 
   function handleEvent(raw: string): void {
     const dataLines: string[] = [];
+    let eventId: string | undefined;
     for (const line of raw.split('\n')) {
       if (line === '' || line.startsWith(':')) continue; // blank / comment
-      // Only `data:` fields matter to the gateway wire format.
       if (line.startsWith('data:')) {
         const value = line.slice(5);
         // SSE strips ONE optional leading space after the field colon.
         dataLines.push(value.startsWith(' ') ? value.slice(1) : value);
+      } else if (line.startsWith('id:')) {
+        const value = line.slice(3);
+        eventId = value.startsWith(' ') ? value.slice(1) : value;
       }
-      // Other field names (event:, id:, retry:) are ignored — not on the wire.
+      // Other field names (event:, retry:) are ignored — not on the wire.
     }
     if (dataLines.length === 0) return; // comment-only / field-only event
-    onEvent(dataLines.join('\n'));
+    onEvent(dataLines.join('\n'), eventId);
   }
 
   function drain(): void {
