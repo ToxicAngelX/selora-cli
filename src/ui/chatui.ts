@@ -11,7 +11,7 @@
 import type { Theme } from './theme.js';
 import type { MarkdownStyle } from './markdown.js';
 import type { DiffStyle } from './diff.js';
-import { sanitizeTerminalText } from './terminal-text.js';
+import { sanitizeTerminalText, terminalTextWidth, truncateTerminalText } from './terminal-text.js';
 
 /** Tool name → display name (read_file → Read). Unknown → capitalized. */
 const TOOL_DISPLAY: Readonly<Record<string, string>> = {
@@ -37,13 +37,19 @@ const TOOL_DISPLAY: Readonly<Record<string, string>> = {
 
 /** The model-facing label `tool(args)` → display `Name(args)`. */
 export function toolDisplayName(name: string): string {
-  return TOOL_DISPLAY[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
+  const safeName = sanitizeTerminalText(name);
+  const mapped = Object.hasOwn(TOOL_DISPLAY, safeName) ? TOOL_DISPLAY[safeName] : undefined;
+  return mapped ?? safeName.charAt(0).toUpperCase() + safeName.slice(1);
 }
 
 /** `● Read(src/api.ts)` — the tool-call header line. */
 export function renderToolStart(name: string, label: string, theme: Theme): string {
-  const args = label.startsWith(`${name}(`) ? label.slice(name.length + 1, -1) : label;
-  return `${theme.cyan('●')} ${theme.star(`${toolDisplayName(name)}(${sanitizeTerminalText(args)})`)}`;
+  const safeName = sanitizeTerminalText(name);
+  const safeLabel = sanitizeTerminalText(label);
+  const args = safeLabel.startsWith(`${safeName}(`)
+    ? safeLabel.slice(safeName.length + 1, -1)
+    : safeLabel;
+  return `${theme.cyan('●')} ${theme.star(`${toolDisplayName(safeName)}(${sanitizeTerminalText(args)})`)}`;
 }
 
 /** How many content lines survive before the "… +N lines" collapse. */
@@ -88,8 +94,12 @@ export function renderToolResult(info: ToolResultDisplay, theme: Theme): string[
 // theme adapters
 // ---------------------------------------------------------------------------
 
-/** MarkdownStyle backed by the theme (identity when color is off). */
-export function markdownStyleFor(theme: Theme): MarkdownStyle {
+/** MarkdownStyle backed by the theme, with boxes bounded by terminal cells. */
+export function markdownStyleFor(
+  theme: Theme,
+  width = process.stdout.columns ?? 80,
+): MarkdownStyle {
+  const columns = Math.max(1, Math.min(80, Number.isFinite(width) ? Math.floor(width) : 80));
   return {
     heading: (text, level) =>
       level === 1 ? theme.wrap(theme.palette.star, text, { bold: true }) : theme.star(text),
@@ -98,20 +108,27 @@ export function markdownStyleFor(theme: Theme): MarkdownStyle {
     code: (text) => theme.cyan(text),
     bullet: (marker, text, indent) => {
       const pad = '  '.repeat(indent);
-      const mark = /^\d+\.$/.test(marker) ? `${marker} ` : '• ';
+      const mark = /^\d+$/.test(marker) ? `${marker}. ` : '• ';
       return `${pad}${theme.violet(mark)}${text}`;
     },
     codeBlock: (lines, lang) => {
-      const width = Math.min(60, Math.max(...lines.map((l) => l.length), lang.length + 2, 3));
+      if (columns < 7) return lines.map((line) => truncateTerminalText(line, columns));
+      const innerMax = Math.max(3, columns - 6);
+      const width = Math.min(
+        innerMax,
+        Math.max(...lines.map((l) => terminalTextWidth(l)), terminalTextWidth(lang) + 2, 3),
+      );
+      const safeLang = truncateTerminalText(lang, Math.max(1, width - 2));
       const top =
-        lang === ''
+        safeLang === ''
           ? theme.dim(`╭${'─'.repeat(width + 2)}╮`)
           : theme.dim(
-              `╭─ ${theme.cyan(lang)} ${'─'.repeat(Math.max(1, width - lang.length - 2))}╮`,
+              `╭─ ${theme.cyan(safeLang)} ${'─'.repeat(Math.max(0, width - terminalTextWidth(safeLang) - 1))}╮`,
             );
-      const body = lines.map((l) =>
-        theme.dim(`│ ${l}${' '.repeat(Math.max(0, width - l.length))} │`),
-      );
+      const body = lines.map((line) => {
+        const l = truncateTerminalText(line, width);
+        return theme.dim(`│ ${l}${' '.repeat(Math.max(0, width - terminalTextWidth(l)))} │`);
+      });
       const bottom = theme.dim(`╰${'─'.repeat(width + 2)}╯`);
       return [top, ...body, bottom];
     },

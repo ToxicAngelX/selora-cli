@@ -569,10 +569,11 @@ export interface PromptRouterDeps {
 const NAV_UP = ['\x1b[A', '\x1bOA'];
 const NAV_DOWN = ['\x1b[B', '\x1bOB'];
 const SHIFT_TAB = '\x1b[Z';
+const NEWLINE_SEQUENCES = ['\x1b[13;2u', '\x1b[13;2~', '\x1b[27;2;13~'];
 const CTRL_C = '\x03';
 const CTRL_R = '\x12';
 /** Escape sequences the router acts on (longest-first matching at the head). */
-const KNOWN_SEQUENCES = [...NAV_UP, ...NAV_DOWN, SHIFT_TAB];
+const KNOWN_SEQUENCES = [...NAV_UP, ...NAV_DOWN, SHIFT_TAB, ...NEWLINE_SEQUENCES];
 /** Bytes that begin a router-relevant keypress (ends an ordinary text run). */
 const SPECIAL_STARTS = new Set(['\x1b', CTRL_C, CTRL_R, '\r', '\n', '\t']);
 /** How long a lone ESC (or a split escape prefix) waits for more bytes. */
@@ -788,6 +789,10 @@ export class PromptRouter {
   // -- key handlers ---------------------------------------------------------
 
   private onEscapeSeq(seq: string): void {
+    if (NEWLINE_SEQUENCES.includes(seq)) {
+      this.insertPasted('\n');
+      return;
+    }
     if (NAV_UP.includes(seq)) {
       this.onNav(-1);
       return;

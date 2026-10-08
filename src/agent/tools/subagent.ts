@@ -127,9 +127,10 @@ export function makeSubagentTool(deps: SubagentDeps): Tool {
           return badShape('spawn_agent: "tools" must name at least one tool.');
         }
       }
-      const subTools = toolNames === undefined
-        ? subToolsAll
-        : subToolsAll.filter((t) => toolNames!.includes(t.name));
+      const subTools =
+        toolNames === undefined
+          ? subToolsAll
+          : subToolsAll.filter((t) => toolNames!.includes(t.name));
 
       const label = clip(task, TASK_LABEL_CAP);
       if (ctx.dryRun) {
@@ -165,25 +166,21 @@ export function makeSubagentTool(deps: SubagentDeps): Tool {
           autoApprove: deps.autoApprove,
           allows: deps.allows,
           renderDiff: deps.renderDiff,
-          signal: deps.signal?.(),
+          signal: ctx.signal ?? deps.signal?.(),
           callbacks: {
             onDelta: () => {
               // The sub's reply text streams only into its final report; the
               // parent UI shows activity lines, not a second live transcript.
             },
             onActivity: (line) => emit(`sub: ${line}`),
-            onToolStart: (name, l) => emit(`sub: → ${name}(${clip(l, 60)})`),
+            onToolStart: (_name, label) => emit(`sub: → ${clip(label, 60)}`),
             onToolResult: (info) => {
               emit(`sub: ${info.ok ? '·' : '✗'} ${clip(info.summary, 90)}`);
-              deps.onSubUsage?.({ totalTokens: 0, charge: undefined });
             },
             onTurnComplete: (totals) => {
               deps.onSubUsage?.({
-                totalTokens: totals.totalTokens,
-                charge:
-                  totals.totalChargeMicro !== undefined
-                    ? (totals.totalChargeMicro / 1_000_000n).toString()
-                    : undefined,
+                totalTokens: totals.usage?.totalTokens ?? 0,
+                charge: totals.charge,
               });
             },
           },

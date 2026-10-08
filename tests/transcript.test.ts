@@ -28,6 +28,34 @@ describe('TranscriptStore', () => {
     expect(store.markRendered('assistant:1')).toBe(false);
   });
 
+  it('does not expose mutable records and locks a completed message', () => {
+    const store = new TranscriptStore();
+    store.append('assistant:1', 'assistant', 'hello');
+    const first = store.get('assistant:1');
+    expect(first).toEqual({
+      id: 'assistant:1',
+      kind: 'assistant',
+      text: 'hello',
+      complete: false,
+      rendered: false,
+    });
+    expect(() => {
+      if (first) (first as { text: string }).text = 'mutated';
+    }).toThrow();
+    store.apply({ type: 'complete', id: 'assistant:1' });
+    store.append('assistant:1', 'assistant', ' later');
+    expect(store.get('assistant:1')?.text).toBe('hello');
+    store.clear();
+    expect(store.snapshot()).toEqual([]);
+  });
+
+  it('deduplicates event IDs per message, not globally', () => {
+    const store = new TranscriptStore();
+    store.append('a', 'assistant', 'A', 'delta-1');
+    store.append('b', 'assistant', 'B', 'delta-1');
+    expect(store.snapshot().map((m) => m.text)).toEqual(['A', 'B']);
+  });
+
   it('sanitizes untrusted message text before it reaches the renderer', () => {
     const esc = String.fromCharCode(27);
     const store = new TranscriptStore();

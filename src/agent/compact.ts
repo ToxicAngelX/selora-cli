@@ -21,6 +21,8 @@ import type { ChatMessage } from '../api/endpoints/chat.js';
 import { SeloraClient } from '../api/client.js';
 import { streamChat } from '../api/endpoints/chat.js';
 import { estimateTokensHistory } from './contextmeter.js';
+import { SeloraApiError } from '../api/errors.js';
+import { throwIfCancelled } from './tool.js';
 
 /** Messages always kept verbatim at the tail (never folded away). */
 export const KEEP_RECENT = 6;
@@ -34,7 +36,9 @@ export interface CompactOptions {
   /** The cheap model used to summarize (default: same model — caller decides). */
   compactModel?: string;
   /** Injectable summarizer for tests. */
-  summarize?: (messages: readonly ChatMessage[]) => Promise<string>;
+  summarize?: (messages: readonly ChatMessage[], signal?: AbortSignal) => Promise<string>;
+  /** Abort compaction and propagate canonical cancellation. */
+  signal?: AbortSignal | undefined;
 }
 
 export interface CompactResult {
@@ -112,6 +116,7 @@ async function summarizeWith(
   client: SeloraClient,
   model: string,
   messages: readonly ChatMessage[],
+  signal?: AbortSignal,
 ): Promise<string> {
   let text = '';
   const transcript = renderForSummary(messages);
@@ -119,10 +124,8 @@ async function summarizeWith(
     client,
     {
       model,
-      messages: [
-        { role: 'user', content: `${SUMMARY_PROMPT}\n\n---\n${transcript}\n---` },
-      ],
-      signal: undefined,
+      messages: [{ role: 'user', content: `${SUMMARY_PROMPT}\n\n---\n${transcript}\n---` }],
+      signal,
     },
     {
       onDelta: (t: string) => {
@@ -135,8 +138,8 @@ async function summarizeWith(
 
 /**
  * Maybe-compact: returns messages unchanged unless the estimated tokens cross
- * the threshold AND there is a foldable prefix. Never throws — a failed
- * summary returns the original history.
+ * the threshold AND there is a foldable prefix. Ordinary summary failures
+ * return the original history; cancellation propagates to the caller.
  */
 export async function maybeCompact(
   history: readonly ChatMessage[],
@@ -144,6 +147,7 @@ export async function maybeCompact(
   opts: CompactOptions,
 ): Promise<CompactResult> {
   const threshold = opts.threshold ?? 0.9;
+  throwIfCancelled(opts.signal);
   const before = estimateTokensHistory(history);
   const tokensBefore = before;
   const no = (messages: ChatMessage[]): CompactResult => ({
@@ -167,11 +171,14 @@ export async function maybeCompact(
   try {
     summary =
       opts.summarize !== undefined
-        ? await opts.summarize(toFold)
-        : await summarizeWith(client, opts.compactModel ?? '', toFold);
-  } catch {
+        ? await opts.summarize(toFold, opts.signal)
+        : await summarizeWith(client, opts.compactModel ?? '', toFold, opts.signal);
+  } catch (err) {
+    throwIfCancelled(opts.signal);
+    if (err instanceof SeloraApiError && err.kind === 'cancelled') throw err;
     return no([...history]);
   }
+  throwIfCancelled(opts.signal);
   if (summary === '') return no([...history]);
 
   const marker: ChatMessage = {

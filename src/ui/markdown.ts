@@ -25,7 +25,7 @@
  * completes. Nothing here throws.
  */
 
-import { sanitizeTerminalText } from './terminal-text.js';
+import { sanitizeTerminalText, TerminalTextSanitizer } from './terminal-text.js';
 
 export interface MarkdownStyle {
   /** ATX heading, level 1-3. */
@@ -262,8 +262,9 @@ class LineRenderer {
 export function renderMarkdown(text: string, style: MarkdownStyle): string {
   const renderer = new LineRenderer(style);
   const out: string[] = [];
-  const parts = sanitizeTerminalText(text).split('\n');
-  if (text.endsWith('\n') && parts.length > 0) parts.pop();
+  const safe = sanitizeTerminalText(text);
+  const parts = safe.split('\n');
+  if (safe.endsWith('\n') && parts.length > 0) parts.pop();
   for (const line of parts) {
     renderer.renderLine(line, out);
   }
@@ -280,13 +281,14 @@ export function renderMarkdown(text: string, style: MarkdownStyle): string {
 export class MarkdownStream {
   private buffer = '';
   private readonly renderer: LineRenderer;
+  private readonly sanitizer = new TerminalTextSanitizer();
 
   constructor(style: MarkdownStyle) {
     this.renderer = new LineRenderer(style);
   }
 
   push(delta: string): string {
-    this.buffer += sanitizeTerminalText(delta);
+    this.buffer += this.sanitizer.push(delta);
     const out: string[] = [];
     let nl = this.buffer.indexOf('\n');
     while (nl !== -1) {
@@ -299,7 +301,7 @@ export class MarkdownStream {
   }
 
   flush(): string {
-    this.buffer = sanitizeTerminalText(this.buffer);
+    this.buffer += this.sanitizer.flush();
     const out: string[] = [];
     if (this.buffer !== '') {
       const line = this.buffer;
