@@ -1,4 +1,7 @@
 import { PassThrough } from 'node:stream';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PromptInput } from '../src/ui/prompt-input.js';
 import { TerminalSurface } from '../src/ui/terminal-surface.js';
@@ -8,7 +11,7 @@ import type { SlashCommand } from '../src/ui/promptmenu.js';
 const inputs: PromptInput[] = [];
 afterEach(() => { for (const input of inputs.splice(0)) input.detach(); vi.useRealTimers(); });
 
-function harness(history: string[] = [], commands: SlashCommand[] = []) {
+function harness(history: string[] = [], commands: SlashCommand[] = [], cwd = '/root/selora-cli') {
   const stdin = new PassThrough() as PassThrough & { isRaw: boolean; setRawMode: ReturnType<typeof vi.fn> };
   stdin.isRaw = false;
   stdin.setRawMode = vi.fn((raw: boolean) => { stdin.isRaw = raw; });
@@ -16,7 +19,7 @@ function harness(history: string[] = [], commands: SlashCommand[] = []) {
   const size = { cols: 40, rows: 12 };
   const surface = new TerminalSurface({ write: (s) => writes.push(s), cols: () => size.cols, rows: () => size.rows });
   const onSubmit = vi.fn(); const onInterrupt = vi.fn(); const onExit = vi.fn(); const onMode = vi.fn();
-  const input = new PromptInput({ stdin, surface, theme: () => themeFor('mono', true, {}), cols: () => size.cols, rows: () => size.rows, footer: () => ['model · cwd · 0 tokens'], commands: () => commands, history: () => history, cwd: '/root/selora-cli', onSubmit, onInterrupt, onExit, onMode });
+  const input = new PromptInput({ stdin, surface, theme: () => themeFor('mono', true, {}), cols: () => size.cols, rows: () => size.rows, footer: () => ['model · cwd · 0 tokens'], commands: () => commands, history: () => history, cwd, onSubmit, onInterrupt, onExit, onMode });
   inputs.push(input); input.attach(); input.prompt();
   const feed = (...chunks: (Buffer | string)[]) => { for (const chunk of chunks) stdin.emit('data', chunk); };
   return { input, stdin, writes, size, surface, feed, onSubmit, onInterrupt, onExit, onMode };
@@ -83,8 +86,14 @@ describe('PromptInput raw public seams', () => {
   });
 
   it('completes @files through pure menu helpers without submitting', () => {
-    const h = harness(); h.feed('read @CONTRI\t');
-    expect(h.input.line).toBe('read @CONTRIBUTING.md'); expect(h.onSubmit).not.toHaveBeenCalled();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'selora-atfile-'));
+    fs.writeFileSync(path.join(dir, 'CONTRIBUTING.md'), 'test fixture\n');
+    try {
+      const h = harness([], [], dir); h.feed('read @CONTRI\t');
+      expect(h.input.line).toBe('read @CONTRIBUTING.md'); expect(h.onSubmit).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('Ctrl+C interrupts, Esc dismisses completion first, Ctrl+D exits only empty', () => {
