@@ -218,6 +218,7 @@ type the command:
 | `/plan`         | show the plan-mode proposal list (numbered, newest last)                      |
 | `/plan clear`   | empty the proposal list                                                       |
 | `/cost`         | session totals: requests, tokens, cost                                        |
+| `/windows`      | the live spend windows: 4h + weekly used/limit/remaining, resets, flags       |
 | `/exit`         | end the session (Ctrl+D at the prompt also works)                             |
 
 Empty lines re-prompt with the bare `❯` marker (the status lines print once
@@ -246,6 +247,30 @@ execute` so the conversation continues as a planning session.
 After each turn, a gray footer appears **only if the usage chunk actually
 arrived** — real numbers only, never invented: `  Tokens: 6,055 · Cost: $0.018`.
 Sub-dime costs keep 3 decimals. No usage chunk → no footer.
+
+## Spend-window status (v1.6)
+
+The prompt's first status line carries a live spend segment when the plan's
+4h window is enforced:
+`glm-5.3-flash · ~/proj · 12.3k tokens · $4.12/$10.00 · resets 2h 14m · week 38%`.
+The data is `GET /v1/me/windows`, polled at REPL idle every 60s and refreshed
+immediately after every reply (a reply just consumed budget — stale numbers
+are lies); nothing is fetched mid-stream. Values ≥ $1 render with 2 decimals
+(truncation toward zero); sub-dollar values keep 4 (`$0.0381`). The week
+percent is the weekly window used/limit, rounded to the nearest 1%.
+
+- An **exhausted** window renders in the theme's warning color:
+  `cap reached · resets 2h 14m`.
+- **Unlimited** plans (pulsar) show no segment — there is nothing to show.
+- Unenforced windows, unreachable endpoints, and unparseable data all omit
+  the segment silently — the footer is additive, never a failure surface
+  (the first failure per streak is logged at `--debug` level only).
+- Narrow terminals shed detail: the week percent drops below 60 columns,
+  the countdown below 40; the used/limit pair always stays.
+- `/windows` prints the full block on demand: both windows with
+  used/limit/remaining, request counts, the reset clock in local time, and
+  the enforced/exhausted/unlimited flags as words.
+
 
 ## Ctrl+C behavior
 

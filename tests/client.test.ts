@@ -95,6 +95,17 @@ describe('SeloraClient', () => {
     });
   });
 
+  it('a caller abort signal cancels a plain request with kind cancelled (never retried)', async () => {
+    server.setHandler(() => ({ status: 200, body: ME_BODY, hang: true }));
+    const controller = new AbortController();
+    const before = server.requests.length;
+    const pending = client().request('/v1/me', { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 20)); // let the request leave
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(server.requests.length).toBe(before + 1); // a caller abort never retries
+  });
+
   it('network failure maps to the network error kind', async () => {
     const dead = new SeloraClient({
       baseUrl: 'http://127.0.0.1:1',

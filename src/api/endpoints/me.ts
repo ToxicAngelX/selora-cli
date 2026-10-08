@@ -320,8 +320,14 @@ function decodeWindow(v: unknown): SpendWindow {
   };
 }
 
-export async function getWindows(client: SeloraClient): Promise<WindowsResponse> {
-  const res = await client.request<unknown>('/v1/me/windows', { auth: 'key' });
+export async function getWindows(
+  client: SeloraClient,
+  opts: { signal?: AbortSignal } = {},
+): Promise<WindowsResponse> {
+  const res = await client.request<unknown>('/v1/me/windows', {
+    auth: 'key',
+    signal: opts.signal,
+  });
   const root = rec(res);
   return {
     session: decodeWindow(root === null ? undefined : root['session']),

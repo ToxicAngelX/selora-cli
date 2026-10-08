@@ -30,6 +30,8 @@ export interface RequestOptions {
   timeoutMs?: number | undefined;
   /** Max additional attempts after the first (default 2). */
   retries?: number | undefined;
+  /** Caller abort (e.g. a shutting-down poller). Rejects with 'cancelled', never retried. */
+  signal?: AbortSignal | undefined;
 }
 
 export interface RequestResult<T> {
@@ -146,7 +148,10 @@ export class SeloraClient {
       const init: RequestInit = {
         method,
         headers,
-        signal: controller.signal,
+        signal:
+          opts.signal === undefined
+            ? controller.signal
+            : AbortSignal.any([controller.signal, opts.signal]),
         redirect: 'error',
       };
       if (bodyText !== undefined) init.body = bodyText;
@@ -158,6 +163,10 @@ export class SeloraClient {
         clearTimeout(timer);
         const elapsed = Date.now() - started;
         if (err instanceof Error && err.name === 'AbortError') {
+          if (opts.signal?.aborted === true) {
+            this.debugLog(`← cancelled by caller (${elapsed}ms)`);
+            throw streamCancelled();
+          }
           this.debugLog(`← timeout (${elapsed}ms) (retries: ${retriesUsed})`);
           throw timeoutError(timeoutMs);
         }

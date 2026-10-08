@@ -109,11 +109,17 @@ import { loadProjectConfig } from '../config/project.js';
 import { SeloraClient } from '../api/client.js';
 import { SeloraApiError } from '../api/errors.js';
 import { getModel, listModels } from '../api/endpoints/models.js';
+import { getWindows } from '../api/endpoints/me.js';
 import type { ChatMessage } from '../api/endpoints/chat.js';
 import { getStoredKey } from '../auth/storage.js';
 import { PromptClosedError } from '../auth/prompts.js';
 import { Renderer } from '../terminal/render.js';
 import { chatFooterLine, formatChatCost } from './chat-footer.js';
+import {
+  WindowsTracker,
+  windowDetailLines,
+  windowFooterSegment,
+} from './chat-windows.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
 import { formatCount, formatDurationCompact } from '../format.js';
 import { microToWireString, parseMoneyMicro } from '../money.js';
@@ -445,6 +451,31 @@ export async function runChat(
 
   /** A turn (model) or a `!` command is running — the prompt is not waiting. */
   const turnInFlight = (): boolean => currentAbort !== null || currentShellKill !== null;
+
+  /**
+   * v1.6: the live usage windows behind the prompt footer's spend segment.
+   * Polled at REPL idle only — a 60s timer whose tick skips mid-stream, plus
+   * an immediate refresh after every reply (a reply just consumed budget).
+   * A failing endpoint only omits the segment; the first failure per streak
+   * is logged at debug level, never per retry.
+   */
+  const windows = new WindowsTracker({
+    fetch: (signal) => getWindows(client, { signal }),
+    isBusy: turnInFlight,
+    onChange: () => input?.refresh(),
+    onFirstError: (err) => {
+      if (ctx.debug) ctx.io.err(`[debug] windows poll failed: ${errText(err)}\n`);
+    },
+  });
+  /** The ` · $4.12/$10.00 · resets 2h 14m · week 38%` suffix for prompt line 1. */
+  const windowsSuffix = (): string => {
+    const w = windows.current;
+    if (w === null) return '';
+    const seg = windowFooterSegment(w, process.stdout.columns || 80, {
+      warning: (s) => theme.warning(s),
+    });
+    return seg === '' ? '' : ` · ${seg}`;
+  };
 
   // Persistent readline interface (the buffering pattern from
   // auth/prompts.ts): lines queue while a turn is streaming, prompts go to
@@ -1082,7 +1113,7 @@ export async function runChat(
   function drawPrompt(): void {
     if (input) { input.prompt(); return; }
     const tokens = sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : '';
-    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd(cwd)}${tokens}\n`));
+    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd(cwd)}${tokens}${windowsSuffix()}\n`));
     ctx.io.writeErr(`${theme.dim(modeStatusLine(safeMode ? 'safe' : mode))}\n`);
     // v1.2: the context meter — estimated tokens vs the budget, gradient fill
     // turning warning/error as it fills. TTY only (raw escapes + noise).
@@ -1327,6 +1358,16 @@ export async function runChat(
       },
     },
     {
+      name: 'windows',
+      description: 'show the live spend windows (4h + weekly caps)',
+      run: async () => {
+        // A fresh fetch (the footer's tracker shares it) — a fault surfaces
+        // here honestly via dispatchSlash, unlike the silent footer.
+        const w = await windows.fetchNow();
+        for (const line of windowDetailLines(w)) r.bullet(line);
+      },
+    },
+    {
       name: 'undo',
       description: 'undo the last applied file change (checkpointed in .selora/history)',
       run: () => {
@@ -1477,7 +1518,7 @@ export async function runChat(
       cols: () => process.stdout.columns || 80,
       rows: () => process.stdout.rows || 24,
       footer: () => [
-        `${current.id} · ${shortCwd(cwd)}${sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : ''}`,
+        `${current.id} · ${shortCwd(cwd)}${sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : ''}${windowsSuffix()}`,
         modeStatusLine(safeMode ? 'safe' : mode),
         'Enter send · Shift+Enter / Ctrl+J newline · Esc stop · Ctrl+D exit',
       ],
@@ -1497,6 +1538,10 @@ export async function runChat(
     input.attach();
     process.stdout.on('resize', resizeInput);
   }
+
+  // v1.6: start the usage-windows poll — the first fetch overlaps startup so
+  // the earliest prompt can already carry the spend segment.
+  windows.start();
 
   // fullPrompt: the status lines print once per real turn; an empty line
   // reprompts bare. promptActive gates the shift+tab mode cycling.
@@ -1878,6 +1923,7 @@ export async function runChat(
         // Fatal: the key is gone/revoked — exit 1 with the verbatim message.
         r.renderError(err);
         currentAbort = null;
+        windows.stop();
         unpin(true);
         router?.detach();
         detachShiftTab();
@@ -1895,10 +1941,14 @@ export async function runChat(
       currentAbort = null;
       view?.finish();
       input?.refresh();
+      // The reply (or a cancelled attempt) just moved the budget — refresh
+      // the window segment now instead of waiting out the 60s idle tick.
+      windows.notifyIdle();
     }
   }
 
   spinner.stop();
+  windows.stop();
   // The pinned banner exits as a closing card: the DECSTBM reset homes the
   // cursor per spec, so park it below the banner and erase beneath — the
   // summary prints clean and the shell inherits a tidy screen edge (v1.2.1).
