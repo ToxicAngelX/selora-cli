@@ -58,6 +58,7 @@ import {
 import type { Tool } from '../agent/tool.js';
 import { themeFor } from '../ui/theme.js';
 import { renderToolResult, renderToolStart } from '../ui/chatui.js';
+import { sanitizeTerminalText } from '../ui/terminal-text.js';
 import { resolveDiffConfig } from '../config/diff.js';
 import { computeFileDiff, DiffHistory, guardPath, renderFileDiff } from '../diff/index.js';
 import type { FileChange, RenderOptions } from '../diff/types.js';
@@ -393,9 +394,10 @@ export async function runRun(
       },
       callbacks: {
         onDelta: (text) => {
-          content += text;
+          const safeText = sanitizeTerminalText(text);
+          content += safeText;
           // --json buffers instead of streaming — one object at the end.
-          if (!ctx.json) r.writeRaw(text);
+          if (!ctx.json) r.writeRaw(safeText);
         },
         onReasoning: (text) => {
           sawReasoning = true;

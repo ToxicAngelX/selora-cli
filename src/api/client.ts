@@ -42,8 +42,8 @@ export interface StreamRequestOptions {
   body?: unknown;
   /** User abort (e.g. Ctrl+C mid-stream). Aborts cleanly with a 'cancelled' error. */
   signal?: AbortSignal | undefined;
-  /** Receives each SSE `data:` payload as a string — including '[DONE]'. */
-  onEvent: (data: string) => void;
+  /** Receives each SSE payload and optional event id — including '[DONE]'. */
+  onEvent: (data: string, eventId?: string) => void;
   /** Time-to-first-byte timeout in ms (default 60s). No timeout while streaming. */
   timeoutMs?: number | undefined;
   /** Max additional attempts after the first for pre-stream 429/5xx (default 2). */

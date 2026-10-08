@@ -202,6 +202,8 @@ import {
 } from '../ui/promptmenu.js';
 import { isTrustedDir } from '../config/trust.js';
 import { runTrustScreen, trustScreenCapable } from '../ui/trustscreen.js';
+import { TranscriptStore } from '../ui/transcript.js';
+import { restorePromptPaste } from '../ui/promptbar.js';
 
 export interface ChatFlags {
   model?: string | undefined;
@@ -258,8 +260,7 @@ function modelLabel(m: SessionModel): string {
   return m.displayName !== '' ? `${m.id} (${m.displayName})` : m.id;
 }
 
-function shortCwd(): string {
-  const cwd = process.cwd();
+function shortCwd(cwd = process.cwd()): string {
   const home = process.env['HOME'] ?? '';
   return home !== '' && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
 }
@@ -1193,7 +1194,7 @@ export async function runChat(
    */
   function drawPrompt(): void {
     const tokens = sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : '';
-    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd()}${tokens}\n`));
+    ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd(cwd)}${tokens}\n`));
     ctx.io.writeErr(`${theme.dim(modeStatusLine(safeMode ? 'safe' : mode))}\n`);
     // v1.2: the context meter — estimated tokens vs the budget, gradient fill
     // turning warning/error as it fills. TTY only (raw escapes + noise).
@@ -1367,6 +1368,7 @@ export async function runChat(
       description: 'clear the conversation history',
       run: () => {
         history.length = 0;
+        sentPrompts.length = 0;
         // Clear the saved session too — "clear" must not resurrect on resume.
         persistSession();
         r.bullet('History cleared.');
@@ -1588,7 +1590,7 @@ export async function runChat(
     } finally {
       promptActive = false;
     }
-    const line = entry.text;
+    const line = restorePromptPaste(entry.text);
     if (entry.silent) {
       // Queued mid-turn, never echoed (the spinner owned the row) — replay the
       // line now so the transcript shows exactly what is running. The prompt
@@ -1671,6 +1673,8 @@ export async function runChat(
     currentAbort = controller;
     hooks.registerInterrupt?.(() => controller.abort());
     const md = new MarkdownStream(markdownStyleFor(theme));
+    const transcript = new TranscriptStore();
+    const assistantMessageId = `assistant:${sessionRequests + 1}`;
     // v0.9 stability: a renderer fault degrades the turn to raw text with a
     // one-line notice — it can NEVER kill the REPL.
     let mdBroken = false;
@@ -1767,8 +1771,15 @@ export async function runChat(
           },
         },
         callbacks: {
-          onDelta: (text) => {
+          onDelta: (text, eventId) => {
             try {
+              const visibleText = transcript.append(
+                assistantMessageId,
+                'assistant',
+                text,
+                eventId === undefined ? undefined : `${assistantMessageId}:${eventId}`,
+              );
+              if (visibleText === '') return;
               // Content ALWAYS owns the row: stop the spinner on EVERY delta,
               // not just the first — thinking models interleave reasoning
               // deltas between paragraphs and onReasoning re-arms the spinner
@@ -1776,10 +1787,10 @@ export async function runChat(
               // `✦ Thinking…` onto the reply text (the v1.2 corruption).
               arbiter.stopForContent();
               if (mdBroken) {
-                r.writeRaw(`${text}\n`);
+                r.writeRaw(`${visibleText}\n`);
                 return;
               }
-              const rendered = md.push(text);
+              const rendered = md.push(visibleText);
               if (rendered !== '') r.writeRaw(`${rendered}\n`); // stdout, live
             } catch {
               mdBroken = true;
@@ -1854,6 +1865,7 @@ export async function runChat(
           },
         },
       });
+      transcript.apply({ type: 'complete', id: assistantMessageId });
       const tail = safeFlush(); // normally '' — onTurnComplete flushed already
       if (tail !== '') r.writeRaw(`${tail}\n`);
 

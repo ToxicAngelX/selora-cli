@@ -11,6 +11,7 @@
 import type { Theme } from './theme.js';
 import type { MarkdownStyle } from './markdown.js';
 import type { DiffStyle } from './diff.js';
+import { sanitizeTerminalText } from './terminal-text.js';
 
 /** Tool name → display name (read_file → Read). Unknown → capitalized. */
 const TOOL_DISPLAY: Readonly<Record<string, string>> = {
@@ -42,7 +43,7 @@ export function toolDisplayName(name: string): string {
 /** `● Read(src/api.ts)` — the tool-call header line. */
 export function renderToolStart(name: string, label: string, theme: Theme): string {
   const args = label.startsWith(`${name}(`) ? label.slice(name.length + 1, -1) : label;
-  return `${theme.cyan('●')} ${theme.star(`${toolDisplayName(name)}(${args})`)}`;
+  return `${theme.cyan('●')} ${theme.star(`${toolDisplayName(name)}(${sanitizeTerminalText(args)})`)}`;
 }
 
 /** How many content lines survive before the "… +N lines" collapse. */
@@ -62,9 +63,10 @@ export interface ToolResultDisplay {
 export function renderToolResult(info: ToolResultDisplay, theme: Theme): string[] {
   const out: string[] = [];
   const mark = info.ok ? theme.success('⎿') : theme.error('⎿');
-  out.push(`  ${mark} ${info.ok ? theme.dim(info.summary) : theme.error(info.summary)}`);
+  const summary = sanitizeTerminalText(info.summary);
+  out.push(`  ${mark} ${info.ok ? theme.dim(summary) : theme.error(summary)}`);
   if (info.content !== undefined && info.content !== '') {
-    const lines = info.content.split('\n');
+    const lines = sanitizeTerminalText(info.content).split('\n');
     const shown = lines.slice(0, RESULT_COLLAPSE_LINES);
     for (const line of shown) out.push(`      ${theme.dim(line)}`);
     if (lines.length > RESULT_COLLAPSE_LINES) {

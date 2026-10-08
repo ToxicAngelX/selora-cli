@@ -66,7 +66,7 @@ export interface AgentUsageTotals {
 }
 
 export interface AgentLoopCallbacks {
-  onDelta: (text: string) => void;
+  onDelta: (text: string, eventId?: string) => void;
   onReasoning?: ((text: string) => void) | undefined;
   /** Gray activity line (stderr): "→ read_file(src/index.ts)" etc. */
   onActivity?: ((line: string) => void) | undefined;
@@ -267,9 +267,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
         signal: opts.signal,
       },
       {
-        onDelta: (text) => {
+        onDelta: (text, eventId) => {
           turnContent += text;
-          cb.onDelta(text);
+          cb.onDelta(text, eventId);
         },
         onReasoning: (text) => {
           cb.onReasoning?.(text);

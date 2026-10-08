@@ -18,6 +18,7 @@
 
 import { spawn } from 'node:child_process';
 import type { Theme } from './ui/theme.js';
+import { sanitizeTerminalText } from './ui/terminal-text.js';
 
 // ---------------------------------------------------------------------------
 // the line parse (pure)
@@ -205,7 +206,8 @@ export function foldShellOutput(
   output: string,
   maxLines: number = SHELL_OUTPUT_LINE_CAP,
 ): { lines: string[]; hidden: number } {
-  const normalized = output.endsWith('\n') ? output.slice(0, -1) : output;
+  const normalizedRaw = sanitizeTerminalText(output);
+  const normalized = normalizedRaw.endsWith('\n') ? normalizedRaw.slice(0, -1) : normalizedRaw;
   if (normalized === '') return { lines: [], hidden: 0 };
   const all = normalized.split('\n');
   if (all.length <= maxLines) return { lines: all, hidden: 0 };

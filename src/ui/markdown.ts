@@ -25,6 +25,8 @@
  * completes. Nothing here throws.
  */
 
+import { sanitizeTerminalText } from './terminal-text.js';
+
 export interface MarkdownStyle {
   /** ATX heading, level 1-3. */
   heading(text: string, level: number): string;
@@ -260,7 +262,7 @@ class LineRenderer {
 export function renderMarkdown(text: string, style: MarkdownStyle): string {
   const renderer = new LineRenderer(style);
   const out: string[] = [];
-  const parts = text.split('\n');
+  const parts = sanitizeTerminalText(text).split('\n');
   if (text.endsWith('\n') && parts.length > 0) parts.pop();
   for (const line of parts) {
     renderer.renderLine(line, out);
@@ -284,7 +286,7 @@ export class MarkdownStream {
   }
 
   push(delta: string): string {
-    this.buffer += delta;
+    this.buffer += sanitizeTerminalText(delta);
     const out: string[] = [];
     let nl = this.buffer.indexOf('\n');
     while (nl !== -1) {
@@ -297,6 +299,7 @@ export class MarkdownStream {
   }
 
   flush(): string {
+    this.buffer = sanitizeTerminalText(this.buffer);
     const out: string[] = [];
     if (this.buffer !== '') {
       const line = this.buffer;
