@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Fails if the npm tarball exceeds the size budget (default: 150 KB — raised
-// from 100 KB in v0.3: the galaxy release ships the docs/ tree it documents,
-// and the tarball legitimately grew past 100 KB).
+// Fails if the npm tarball exceeds the size budget (default: 200 KB — raised
+// from 150 KB in v2.1: the comprehensive UI modernization and docs tree).
 // Usage: node scripts/check-pack-size.mjs <path-to-tarball> [limitBytes]
 import { statSync } from 'node:fs';
 
@@ -11,7 +10,7 @@ if (!tarball) {
   process.exit(1);
 }
 
-const limit = Number(process.argv[3] ?? 150 * 1024);
+const limit = Number(process.argv[3] ?? 200 * 1024);
 if (!Number.isFinite(limit) || limit <= 0) {
   console.error(`Invalid size limit: ${String(process.argv[3])}`);
   process.exit(1);

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0 — Terminal UI and UX Modernization
+
+- **Complete Terminal UI Overhaul** — Modernized terminal UI featuring a vibrant neon-violet to electric-cyan gradient ASCII art banner, version badges, and categorized help system.
+- **Core UI Component System** — Added rounded Unicode boxes (`renderBox`), kinetic multi-step status indicators (`✔`, `⏳`, `✖`, `✦`), aligned data tables, and key-value summary cards.
+- **Enhanced Command Presentation** — Overhauled `whoami`, `balance`, `usage`, `models`, `model`, `keys`, `theme`, `trust`, `init`, and `update` outputs with aligned tables, visual allowance meters, and status badges.
+- **Sleek Interactive Elements** — Integrated neon shimmer orbital spinners and tool execution chips.
+
 ## 1.5.0 — Claude-Code-style file-change display
 
 - **Flat tool-result diffs replace the boxed panel** — `write_file` /
