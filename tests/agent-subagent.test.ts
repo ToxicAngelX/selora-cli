@@ -417,6 +417,316 @@ describe('spawn_agent tool', () => {
   });
 });
 
+describe('spawn_agent batch mode (v2.2)', () => {
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Route sub requests by task marker (the first user message); each request
+   * is delayed `delayMs` while inFlight/maxInFlight track real overlap.
+   */
+  function routeBatch(
+    delayMs: number,
+    perTask?: Record<string, (callCount: number) => { status: number; sse?: string[]; body?: string }>,
+  ): { arrivals: string[]; maxInFlight: () => number; calls: () => number } {
+    const arrivals: string[] = [];
+    let inFlight = 0;
+    let max = 0;
+    let calls = 0;
+    server.setHandler(async (req) => {
+      if (req.method !== 'POST' || req.path !== '/v1/chat/completions') {
+        return { status: 404, body: '{"error":{"code":"not_found","message":"x"}}' };
+      }
+      const body = JSON.parse(req.body) as { messages: { content: unknown }[] };
+      const marker = String(body.messages[0]?.content ?? '');
+      const match = /TASK-\d/.exec(marker);
+      const key = match?.[0] ?? 'TASK-?';
+      calls += 1;
+      inFlight += 1;
+      max = Math.max(max, inFlight);
+      arrivals.push(key);
+      await sleep(delayMs);
+      inFlight -= 1;
+      const custom = perTask?.[key];
+      if (custom !== undefined) return custom(calls);
+      return { status: 200, sse: framesToSse(sseText(`REPORT-${key}`)) };
+    });
+    return { arrivals, maxInFlight: () => max, calls: () => calls };
+  }
+
+  function batchTool(extra?: {
+    onSubEvent?: (l: string) => void;
+    onSubUsage?: (u: { totalTokens: number; charge: string | undefined }) => void;
+    permissions?: ReturnType<typeof createAutoAsker>;
+  }) {
+    return makeSubagentTool({
+      client: makeClient(),
+      model: () => 'm',
+      permissions: extra?.permissions ?? createAutoAsker(),
+      allows: new SessionAllows(),
+      autoApprove: false,
+      parentTools: builtinTools(),
+      onSubEvent: extra?.onSubEvent,
+      onSubUsage: extra?.onSubUsage,
+    });
+  }
+
+  it('read-only toolset → the batch runs CONCURRENTLY (requests overlap)', async () => {
+    const route = routeBatch(150);
+    const events: string[] = [];
+    const tool = batchTool({ onSubEvent: (l) => events.push(l) });
+    const res = await tool.run(
+      {
+        tasks: ['TASK-1 find TODOs', 'TASK-2 map the API', 'TASK-3 draft notes'],
+        tools: ['read_file', 'grep'],
+      },
+      { cwd: tempProject(), dryRun: false },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.summary).toBe('helper batch: 3/3 finished ok (parallel)');
+    expect(route.maxInFlight()).toBe(3); // all three overlapped in flight
+    // Aggregation is in TASK order regardless of completion order.
+    const content = res.content ?? '';
+    const i1 = content.indexOf('[1] ok');
+    const i2 = content.indexOf('[2] ok');
+    const i3 = content.indexOf('[3] ok');
+    expect(i1).toBeGreaterThanOrEqual(0);
+    expect(i1).toBeLessThan(i2);
+    expect(i2).toBeLessThan(i3);
+    expect(content).toContain('REPORT-TASK-1');
+    expect(content).toContain('REPORT-TASK-3');
+    // Indexed UI lines: start + finish carry the sub[i] prefix.
+    expect(events.some((l) => l.includes('· sub[2] started:'))).toBe(true);
+    expect(events.some((l) => l.includes('· sub[3] finished (1 turns)'))).toBe(true);
+  });
+
+  it('a write tool in the set → strictly SEQUENTIAL (no overlap, task order)', async () => {
+    const route = routeBatch(120);
+    const tool = batchTool();
+    const res = await tool.run(
+      {
+        tasks: ['TASK-1 find TODOs', 'TASK-2 map the API', 'TASK-3 draft notes'],
+        tools: ['read_file', 'write_file'],
+      },
+      { cwd: tempProject(), dryRun: false },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.summary).toContain('sequential');
+    expect(route.maxInFlight()).toBe(1);
+    expect(route.arrivals).toEqual(['TASK-1', 'TASK-2', 'TASK-3']);
+  });
+
+  it('omitted tools (full set) → sequential too, and the wire advertises the full set', async () => {
+    const route = routeBatch(80);
+    const tool = batchTool();
+    const res = await tool.run(
+      { tasks: ['TASK-1 a', 'TASK-2 b'] },
+      { cwd: tempProject(), dryRun: false },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.summary).toContain('sequential');
+    expect(route.maxInFlight()).toBe(1);
+  });
+
+  it('concurrency bound: 5 read-only tasks never exceed 3 in flight', async () => {
+    const route = routeBatch(120);
+    const tool = batchTool();
+    const res = await tool.run(
+      {
+        tasks: ['TASK-1 a', 'TASK-2 b', 'TASK-3 c', 'TASK-4 d', 'TASK-5 e'],
+        tools: ['read_file', 'glob', 'list_dir'],
+      },
+      { cwd: tempProject(), dryRun: false },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.summary).toBe('helper batch: 5/5 finished ok (parallel)');
+    expect(route.maxInFlight()).toBe(3);
+    // Queued tasks started only after slots freed — every task ran exactly once.
+    expect([...route.arrivals].sort()).toEqual(['TASK-1', 'TASK-2', 'TASK-3', 'TASK-4', 'TASK-5']);
+    const content = res.content ?? '';
+    expect(content.indexOf('[4] ok')).toBeLessThan(content.indexOf('[5] ok'));
+    expect(content).toContain('REPORT-TASK-5');
+  });
+
+  it('failure isolation: one helper failing never kills the others', async () => {
+    const route = routeBatch(80, {
+      'TASK-2': () => ({
+        status: 400,
+        body: '{"error":{"code":"bad_task","message":"task-2 boom"}}',
+      }),
+    });
+    const events: string[] = [];
+    const tool = batchTool({ onSubEvent: (l) => events.push(l) });
+    const res = await tool.run(
+      {
+        tasks: ['TASK-1 a', 'TASK-2 b', 'TASK-3 c'],
+        tools: ['read_file'],
+      },
+      { cwd: tempProject(), dryRun: false },
+    );
+    expect(res.ok).toBe(false); // partial failure is honest
+    expect(res.summary).toBe('helper batch: 2/3 finished ok (parallel)');
+    const content = res.content ?? '';
+    expect(content).toContain('[1] ok');
+    expect(content).toContain('[2] FAILED · TASK-2 b');
+    expect(content).toContain('task-2 boom');
+    expect(content).toContain('[3] ok');
+    expect(content).toContain('REPORT-TASK-3');
+    expect(events.some((l) => l.includes('· sub[2] failed:'))).toBe(true);
+    expect(route.calls()).toBe(3);
+  });
+
+  it('usage of every parallel helper folds into the parent totals', async () => {
+    routeBatch(60);
+    const usages: { totalTokens: number; charge: string | undefined }[] = [];
+    const tool = batchTool({ onSubUsage: (u) => usages.push(u) });
+    const res = await tool.run(
+      { tasks: ['TASK-1 a', 'TASK-2 b'], tools: ['read_file', 'grep'] },
+      { cwd: tempProject(), dryRun: false },
+    );
+    expect(res.ok).toBe(true);
+    expect(usages.length).toBe(2); // one onTurnComplete per helper
+    expect(usages.reduce((n, u) => n + u.totalTokens, 0)).toBe(60); // 30 + 30
+    expect(usages.every((u) => u.charge === '0.000030')).toBe(true);
+  });
+
+  it('concurrent helpers never prompt simultaneously (asks serialize)', async () => {
+    // Each helper requests a read_file; the asker counts overlap. A fresh
+    // SessionAllows means every read really prompts (no 'a' memory).
+    let asking = 0;
+    let maxAsking = 0;
+    const countingAsker = {
+      ask: async () => {
+        asking += 1;
+        maxAsking = Math.max(maxAsking, asking);
+        await sleep(90);
+        asking -= 1;
+        return 'allow' as const;
+      },
+      replacement: async () => null,
+    };
+    const cwd = tempProject();
+    writeFileSync(join(cwd, 'probe.txt'), 'x\n');
+    server.setHandler(async (req) => {
+      const body = JSON.parse(req.body) as {
+        messages: { role: string; content: unknown; tool_calls?: unknown }[];
+        tools?: { function: { name: string } }[];
+      };
+      // A helper's second turn (after the tool result) answers plainly.
+      const hasToolResult = body.messages.some((m) => m.role === 'tool');
+      if (hasToolResult) {
+        return { status: 200, sse: framesToSse(sseText('read it')) };
+      }
+      return {
+        status: 200,
+        sse: framesToSse([
+          { choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] },
+          {
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: `call_${Math.random().toString(36).slice(2, 8)}`,
+                      type: 'function',
+                      function: {
+                        name: 'read_file',
+                        arguments: JSON.stringify({ path: 'probe.txt' }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: null,
+              },
+            ],
+          },
+          { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+          {
+            choices: [],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+            gateway: { charge: '0.000010', request_id: 'req_par' },
+          },
+          'data: [DONE]',
+        ]),
+      };
+    });
+    const tool = makeSubagentTool({
+      client: makeClient(),
+      model: () => 'm',
+      permissions: countingAsker,
+      allows: new SessionAllows(),
+      autoApprove: false,
+      parentTools: builtinTools(),
+    });
+    const res = await tool.run(
+      { tasks: ['TASK-1 read the probe', 'TASK-2 read the probe too'], tools: ['read_file'] },
+      { cwd, dryRun: false },
+    );
+    expect(res.ok).toBe(true);
+    expect(maxAsking).toBe(1); // two prompts happened, never concurrently
+  });
+
+  it('dry run previews the batch mode and why — and never touches the network', async () => {
+    server.setHandler(() => ({ status: 500, body: '{}' }));
+    server.requests.length = 0;
+    const tool = batchTool();
+    const parallel = await tool.run(
+      { tasks: ['TASK-1 a', 'TASK-2 b'], tools: ['read_file', 'grep'] },
+      { cwd: tempProject(), dryRun: true },
+    );
+    expect(parallel.ok).toBe(true);
+    expect(parallel.preview).toContain('PARALLEL');
+    expect(parallel.preview).toContain('1. TASK-1 a');
+    expect(parallel.preview).toContain('2. TASK-2 b');
+    const sequential = await tool.run(
+      { tasks: ['TASK-1 a', 'TASK-2 b'], tools: ['read_file', 'write_file'] },
+      { cwd: tempProject(), dryRun: true },
+    );
+    expect(sequential.preview).toContain('SEQUENTIAL');
+    expect(sequential.preview).toContain('forbidden');
+    // The web fetchers are read-kind but NOT parallel-safe.
+    const webby = await tool.run(
+      { tasks: ['TASK-1 a', 'TASK-2 b'], tools: ['read_file', 'web_fetch'] },
+      { cwd: tempProject(), dryRun: true },
+    );
+    expect(webby.preview).toContain('SEQUENTIAL');
+    expect(server.requests.length).toBe(0);
+  });
+
+  it('the batch permission label lists every task under one approval', () => {
+    const tool = batchTool();
+    expect(
+      tool.permissionLabel({
+        tasks: ['find TODOs', 'map API', 'draft notes'],
+        tools: ['read_file'],
+      }),
+    ).toBe('spawn_agent(3 tasks: find TODOs; map API; draft notes)');
+    // Single-task labels are unchanged.
+    expect(tool.permissionLabel({ task: 'count the TODOs' })).toBe('spawn_agent(count the TODOs)');
+  });
+
+  it('bad batch shapes are honest failures', async () => {
+    const tool = batchTool();
+    const cwd = tempProject();
+    const run = (input: unknown) => tool.run(input, { cwd, dryRun: false });
+    expect((await run({ tasks: [] })).summary).toContain('2–5');
+    expect((await run({ tasks: 'x' })).summary).toContain('array');
+    expect((await run({ tasks: ['a', 'b', 'c', 'd', 'e', 'f'] })).summary).toContain('2–5');
+    expect((await run({ tasks: ['a', 42] })).summary).toContain('must be a string');
+    expect((await run({ tasks: ['a', '  '] })).summary).toContain('must not be empty');
+    expect((await run({ tasks: ['same task', 'same task'] })).summary).toContain('duplicate');
+    const both = await run({ task: 'one', tasks: ['a', 'b'] });
+    expect(both.ok).toBe(false);
+    expect(both.summary).toContain('not both');
+    // A single task (old shape) still works and stays sequential-path exact.
+    expect((await run({ task: '   ' })).summary).toContain('must not be empty');
+    expect((await run({})).summary).toContain('missing required string field "task"');
+  });
+});
+
 describe('spawn_agent wiring in the commands', () => {
   it('chat --safe excludes spawn_agent (read-only stays read-only)', async () => {
     // Import the wiring logic indirectly: chat constructs tools internally.

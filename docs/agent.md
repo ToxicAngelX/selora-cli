@@ -159,6 +159,32 @@ The task string must be fully self-contained — the helper sees ONLY it. Bad
 shapes (`task` missing/empty, unknown tool names in `tools`) are honest
 `{ok:false}` results fed back to the model.
 
+### Batches — `tasks: [...]` (v2.2)
+
+`tasks` (2–5 strings, mutually exclusive with `task`) runs one helper per
+task under a **single approval** — the prompt lists every task
+(`spawn_agent(3 tasks: find TODOs; map API; draft notes)`).
+
+- **The parallelism gate**: the batch runs CONCURRENTLY (at most **3 helpers
+  in flight**, the rest queue) ONLY when every effective tool is read-only
+  and offline — `read_file`, `list_dir`, `glob`, `grep`, `git_status`,
+  `git_diff`, `git_log` (the `kind: 'read'` set minus the network fetchers
+  `web_search`/`web_fetch`). Any write/exec/web tool in the set — including
+  omitting `tools` entirely — runs the batch SEQUENTIALLY: the line-based
+  permission asker cannot serve two prompts at once, and concurrent mutation
+  of one working tree is forbidden. `--yes`/auto mode does NOT relax the
+  gate. The dry run names the mode and why.
+- **Prompt serialization**: parallel helpers share a wrapper that serves
+  permission asks one at a time (a manual-mode read or an outside-root read
+  can still prompt — it just never races another helper's prompt).
+- **Failure isolation**: helpers settle independently (allSettled semantics);
+  one helper's failure never kills the others. The aggregated result lists
+  every task IN ORDER — `[2] FAILED · map the API` + the error, or `[1] ok ·
+  3 turns · …` + the report (each report clipped at 2000 chars).
+- **UI**: batch activity lines carry the helper index —
+  `· sub[2] started: …` / `sub[2]: → read_file(x)` / `· sub[2] finished (4
+  turns): …` — so interleaved activity stays readable.
+
 ## The tools
 
 Inside the project root, all filesystem tools keep the v0.2 sandbox: paths
@@ -184,7 +210,7 @@ project's `context.exclude` globs are enforced.
 | `git_status` / `git_diff` / `git_log` | Read-only git views via `spawn("git", args)`.                                                                                                                                                                                                                      |
 | `git_commit`                          | Stages the listed files and commits — the message is an argv element, never shell text.                                                                                                                                                                            |
 | `git_restore`                         | `git checkout -- <path>` for exactly one path.                                                                                                                                                                                                                     |
-| `spawn_agent` (v1.0)                  | Delegates a self-contained task to a nested agent loop (a helper agent). The task string is all the helper sees; it returns its final report as text. Same cwd, same permission prompts, no nested `spawn_agent`. Optional `tools: [...]` restricts its toolset.   |
+| `spawn_agent` (v1.0, batch v2.2)        | Delegates a self-contained task to a nested agent loop (a helper agent). The task string is all the helper sees; it returns its final report as text. Same cwd, same permission prompts, no nested `spawn_agent`. Optional `tools: [...]` restricts its toolset. `tasks: [2–5]` runs a batch under one approval — parallel (max 3) when the toolset is read-only and offline, sequential otherwise. |
 
 **Windows:** `run_command` refuses by default — opt in per project with
 `"agent": {"allowWindowsCmd": true}` in `selora.json` (it then spawns

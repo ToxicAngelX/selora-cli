@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.2.0 — parallel read-only subagents + stream-drop resume
+
+- **Mid-stream drop resume** — a reply whose SSE connection dies mid-body
+  (network/timeout, never a cancel, never an HTTP/billing error) no longer
+  dies with it. When reply text already streamed and no tool-call fragment
+  was seen, the turn resumes in place: the partial goes back as an assistant
+  message with a continue-exactly instruction, the continuation streams live
+  like any other, and the final text is stitched with the seam overlap
+  trimmed once (`· stream dropped — resuming (1/2)`). At most 2 resumes per
+  turn; after that the error surfaces with the partial text preserved
+  (`· stream dropped — reply incomplete after 2 resumes` — what you watched
+  stream is never lost). A turn that streamed tool-call fragments is NEVER
+  resumed — a resume must not re-execute tools.
+- **Usage honesty on resumes** — a dropped attempt's usage/charge chunks that
+  arrived before the drop fold into the turn totals alongside the resumed
+  attempt's: both halves were really charged, and the footer shows it.
+- **`spawn_agent` batch mode** — `tasks: ["…", "…"]` (2–5) runs one helper
+  per task under a SINGLE approval (`spawn_agent(3 tasks: find TODOs; map
+  API; draft notes)`). With a read-only offline toolset (`read_file`,
+  `list_dir`, `glob`, `grep`, `git_status`, `git_diff`, `git_log`) the batch
+  runs in PARALLEL, max 3 helpers in flight; any write/exec/web tool in the
+  set keeps it strictly sequential — concurrent mutation of one working tree
+  stays forbidden, and `--yes` does not relax the gate. Parallel helpers
+  serialize their permission prompts (one ask at a time), failures are
+  isolated per helper (one failing never kills the others), activity lines
+  carry the helper index (`sub[2]: → read_file(x)`), and the aggregated
+  result reports every task in order with its own ok/fail, turns, and report.
+  The single-`task` path is unchanged.
+
 ## 2.1.1 — write safety everywhere + session rename
 
 - **Atomic, stale-safe writes on EVERY execution path** — previously only the

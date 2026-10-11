@@ -29,6 +29,12 @@ export interface MockResponse {
   sseDelayMs?: number | undefined;
   /** After writing all frames, leave the stream open (mid-stream hang — abort tests). */
   sseHang?: boolean | undefined;
+  /**
+   * After writing all frames, DESTROY the socket mid-stream (a connection
+   * drop: the client's reader rejects with a network error — unlike a clean
+   * end, which the client reads as a finish-less completion).
+   */
+  sseDestroy?: boolean | undefined;
 }
 
 export type MockHandler = (
@@ -99,6 +105,13 @@ export async function startMockServer(): Promise<MockServer> {
               res.write(frame);
             }
             if (mock.sseHang === true) return; // stream stays open mid-way
+            if (mock.sseDestroy === true) {
+              // A beat for the frames to flush, then kill the socket — the
+              // client sees a mid-body connection drop, not a clean end.
+              const socket = res.socket;
+              setTimeout(() => socket?.destroy(), 25).unref();
+              return;
+            }
             res.end();
             return;
           }

@@ -325,13 +325,30 @@ export async function streamChat(
     body['tool_choice'] = 'auto';
   }
 
-  await client.requestStream('/v1/chat/completions', {
-    body,
-    signal: opts.signal,
-    timeoutMs: opts.timeoutMs,
-    retries: opts.retries,
-    onEvent,
-  });
+  try {
+    await client.requestStream('/v1/chat/completions', {
+      body,
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs,
+      retries: opts.retries,
+      onEvent,
+    });
+  } catch (err) {
+    // v2.2: a mid-body drop (network/timeout — never a user cancel, never an
+    // HTTP/billing error) carries what the stream decoded before dying, so the
+    // agent loop can resume honestly: usage/charge chunks that arrived in time
+    // (the gateway charged for them) and whether any tool_calls fragment
+    // streamed (a turn with partial tool calls is NOT resumable — a resume
+    // must never re-execute tools). Everything else rethrows untouched.
+    if (err instanceof SeloraApiError && (err.kind === 'network' || err.kind === 'timeout')) {
+      err.streamPartial = {
+        usage: result.usage,
+        charge: result.charge,
+        toolCallsSeen: result.toolCallsRequested,
+      };
+    }
+    throw err;
+  }
 
   // Assemble the accumulated fragments (index order). A call with no id or no
   // name by stream end is malformed — dropped, never guessed.

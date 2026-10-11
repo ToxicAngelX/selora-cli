@@ -34,6 +34,22 @@ export interface SeloraApiErrorInit {
   retryAfterSeconds?: number | undefined;
 }
 
+/**
+ * v2.2: what a MID-BODY dropped stream had decoded before dying — attached by
+ * streamChat (endpoints/chat.ts) to 'network'/'timeout' errors only, so the
+ * agent loop can decide whether the turn is resumable (no tool-call fragments)
+ * and account honestly for usage/charge chunks that arrived before the drop
+ * (the gateway charged for those tokens). Undefined on every other error.
+ */
+export interface StreamPartialState {
+  /** Usage decoded before the drop (only when its chunk arrived in time). */
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+  /** Raw scale-6 charge string decoded before the drop. */
+  charge: string | undefined;
+  /** True when any tool_calls fragment (or a tool_calls finish reason) streamed. */
+  toolCallsSeen: boolean;
+}
+
 /** Uniform error type thrown by the API client and commands. */
 export class SeloraApiError extends Error {
   readonly kind: ApiErrorKind;
@@ -43,6 +59,12 @@ export class SeloraApiError extends Error {
   readonly apiMessage: string | undefined;
   readonly body: string | undefined;
   readonly retryAfterSeconds: number | undefined;
+  /**
+   * v2.2 — the ONE mutable field: streamChat sets it post-construction at the
+   * throw site (rebuilding the error there would lose the original stack).
+   * Undefined for every error that is not a mid-body stream drop.
+   */
+  streamPartial: StreamPartialState | undefined = undefined;
 
   constructor(init: SeloraApiErrorInit) {
     super(init.message);

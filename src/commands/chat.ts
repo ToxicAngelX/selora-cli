@@ -1963,6 +1963,11 @@ export async function runChat(
     } catch (err) {
       spinner.stop();
       view?.finish();
+      // v2.2: a dropped stream may leave the tail of the partial reply sitting
+      // in the markdown buffer (an unterminated line). Flush it BEFORE the
+      // error — the user never loses text they watched stream.
+      const flushedTail = safeFlush();
+      if (flushedTail !== '') r.writeRaw(`${flushedTail}\n`);
       // Preserve wire-valid completed tool effects, not an unmatched user/stream.
       history.splice(0, history.length, ...(checkpoint ?? preTurnHistory));
       if (checkpoint !== undefined) persistSession();

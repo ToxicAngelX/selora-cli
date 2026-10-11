@@ -30,6 +30,7 @@ import { SeloraApiError } from '../api/errors.js';
 import {
   streamChat,
   type ChatMessage,
+  type ChatResult,
   type ChatUsage,
   type WireToolCall,
   type WireToolDefinition,
@@ -51,6 +52,38 @@ import {
 export const DEFAULT_MAX_TURNS = 25;
 /** Circuit breaker: this many consecutive FAILED tool calls abort the run. */
 export const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+/**
+ * v2.2: how many times a turn whose stream DROPPED mid-body (network/timeout
+ * after reply text streamed, before any tool-call fragment) is resumed —
+ * "continue exactly where you stopped" — before the error surfaces with the
+ * partial text preserved.
+ */
+export const STREAM_RESUME_MAX = 2;
+/** The seam-overlap check is bounded to the partial's last this-many chars. */
+const STREAM_RESUME_OVERLAP_CAP = 200;
+/** The synthetic user message a resume appends after the partial assistant text. */
+const STREAM_RESUME_INSTRUCTION =
+  'Your previous reply was cut off by a connection drop. Continue EXACTLY where you stopped: output only the remaining text of that reply — no apology, no preamble, and do not repeat text you already wrote.';
+
+/**
+ * v2.2: join a dropped stream's partial text with its resume continuation. The
+ * model is told to continue exactly where it stopped but may repeat a few
+ * words at the seam — trim the LONGEST suffix of `partial` that equals a
+ * prefix of `continuation` (checked only within partial's last
+ * STREAM_RESUME_OVERLAP_CAP chars) exactly once. No clean overlap → joined
+ * as-is: an honest seam beats lost text.
+ */
+export function stitchStreamParts(partial: string, continuation: string): string {
+  if (partial === '' || continuation === '') return partial + continuation;
+  const tail = partial.slice(Math.max(0, partial.length - STREAM_RESUME_OVERLAP_CAP));
+  const maxOverlap = Math.min(tail.length, continuation.length);
+  for (let k = maxOverlap; k > 0; k -= 1) {
+    if (tail.endsWith(continuation.slice(0, k))) {
+      return partial + continuation.slice(k);
+    }
+  }
+  return partial + continuation;
+}
 
 export interface AgentUsageTotals {
   turn: number;
@@ -285,29 +318,128 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentRunResu
 
   for (let turn = 1; turn <= opts.maxTurns; turn += 1) {
     throwIfCancelled(opts.signal);
-    let turnContent = '';
     let sequence = 0;
     const assistantId = `${runId}:turn:${turn}`;
     cb.onEvent?.({ type: 'assistant-start', id: assistantId, turn });
-    const result = await streamChat(
-      opts.client,
-      {
-        model: opts.model,
-        messages: history,
-        tools: opts.tools.map(toolToWire),
-        signal: opts.signal,
-      },
-      {
-        onDelta: (text, eventId) => {
-          turnContent += text;
-          cb.onEvent?.({ type: 'assistant-delta', id: assistantId, text, sequence: sequence++ });
-          cb.onDelta(text, eventId);
-        },
-        onReasoning: (text) => {
-          cb.onReasoning?.(text);
-        },
-      },
-    );
+
+    // v2.2 mid-stream drop resume: when streamChat throws a network/timeout
+    // error (NEVER 'cancelled', never auth/4xx/billing kinds) after reply text
+    // already streamed and BEFORE any tool-call fragment, the turn RESUMES
+    // instead of dying — the partial goes back as an assistant message plus a
+    // continue-exactly instruction, and the continuation is stitched onto it
+    // (one overlap trim per seam). At most STREAM_RESUME_MAX resumes per turn;
+    // a turn that streamed tool-call fragments is NEVER resumed, and a resume
+    // never re-executes tools (the continuation is a fresh stream turn).
+    const parts: string[] = [];
+    let attemptContent = '';
+    let resumesUsed = 0;
+    let messagesForTurn: ChatMessage[] = history;
+    let result: ChatResult;
+    for (;;) {
+      throwIfCancelled(opts.signal);
+      attemptContent = '';
+      try {
+        result = await streamChat(
+          opts.client,
+          {
+            model: opts.model,
+            messages: messagesForTurn,
+            tools: opts.tools.map(toolToWire),
+            signal: opts.signal,
+          },
+          {
+            onDelta: (text, eventId) => {
+              attemptContent += text;
+              cb.onEvent?.({ type: 'assistant-delta', id: assistantId, text, sequence: sequence++ });
+              // Resume attempts re-namespace the gateway's SSE event ids: a
+              // gateway numbering ids per request would otherwise collide with
+              // the dropped attempt's ids in the caller's transcript dedup
+              // (chat keys by assistantMessageId:eventId) and swallow the
+              // continuation.
+              cb.onDelta(
+                text,
+                eventId === undefined || resumesUsed === 0
+                  ? eventId
+                  : `resume${resumesUsed}:${eventId}`,
+              );
+            },
+            onReasoning: (text) => {
+              cb.onReasoning?.(text);
+            },
+          },
+        );
+        break;
+      } catch (err) {
+        const dropped =
+          err instanceof SeloraApiError &&
+          (err.kind === 'network' || err.kind === 'timeout') &&
+          opts.signal?.aborted !== true;
+        const partial = err instanceof SeloraApiError ? err.streamPartial : undefined;
+        const streamedText = parts.join('') + attemptContent;
+        const toolFragments = partial?.toolCallsSeen === true;
+        if (dropped && partial !== undefined) {
+          // The dropped attempt was CHARGED by the gateway: fold whatever
+          // usage/charge chunks arrived before the drop into the totals now.
+          // The resume is a new stream turn in the same logical turn — both
+          // halves count.
+          let counted = false;
+          if (partial.usage !== undefined) {
+            usageTotal =
+              usageTotal === undefined
+                ? { ...partial.usage }
+                : {
+                    promptTokens: usageTotal.promptTokens + partial.usage.promptTokens,
+                    completionTokens: usageTotal.completionTokens + partial.usage.completionTokens,
+                    totalTokens: usageTotal.totalTokens + partial.usage.totalTokens,
+                  };
+            counted = true;
+          }
+          if (partial.charge !== undefined && partial.charge !== '') {
+            const micro = parseMoneyMicro(partial.charge);
+            if (micro !== null) {
+              chargeTotalMicro = (chargeTotalMicro ?? 0n) + micro;
+              counted = true;
+            }
+          }
+          if (counted) {
+            cb.onTurnComplete({
+              turn,
+              usage: partial.usage,
+              charge: partial.charge,
+              totalTokens: usageTotal?.totalTokens ?? 0,
+              totalPromptTokens: usageTotal?.promptTokens ?? 0,
+              totalCompletionTokens: usageTotal?.completionTokens ?? 0,
+              totalChargeMicro: chargeTotalMicro,
+            });
+          }
+        }
+        if (!dropped || streamedText === '' || toolFragments || resumesUsed >= STREAM_RESUME_MAX) {
+          if (dropped && streamedText !== '' && !toolFragments) {
+            // Giving up: the partial text the user watched stream stays on the
+            // transcript (its deltas already flowed) — say so, then surface
+            // the error exactly as today.
+            const note = `· stream dropped — reply incomplete after ${resumesUsed} resume${resumesUsed === 1 ? '' : 's'}`;
+            cb.onEvent?.({ type: 'status', id: `${assistantId}:status:drop`, text: note });
+            cb.onActivity?.(note);
+          }
+          throw err;
+        }
+        resumesUsed += 1;
+        parts.push(attemptContent);
+        const note = `· stream dropped — resuming (${resumesUsed}/${STREAM_RESUME_MAX})`;
+        cb.onEvent?.({ type: 'status', id: `${assistantId}:status:resume:${resumesUsed}`, text: note });
+        cb.onActivity?.(note);
+        messagesForTurn = [
+          ...history,
+          { role: 'assistant', content: parts.join('') },
+          { role: 'user', content: STREAM_RESUME_INSTRUCTION },
+        ];
+      }
+    }
+    parts.push(attemptContent);
+    // One overlap trim per resume seam; a never-resumed turn is parts[0] as-is.
+    const turnContent =
+      parts.length === 1 ? parts[0]! : parts.reduce((acc, part) => stitchStreamParts(acc, part));
 
     cb.onEvent?.({ type: 'assistant-complete', id: assistantId, turn, content: turnContent });
 
