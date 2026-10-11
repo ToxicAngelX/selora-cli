@@ -53,7 +53,8 @@ describe('selora trust', () => {
 
       const list = capturedIo();
       await runTrust(ctx(list.io), {});
-      expect(list.cap.out).toContain(dir);
+      expect(list.cap.out.join('\n')).toContain(dir);
+      expect(list.cap.out.join('\n')).toContain(`❯ ${dir}`);
 
       const rm = capturedIo();
       await runTrust(ctx(rm.io), { action: 'remove', dir });

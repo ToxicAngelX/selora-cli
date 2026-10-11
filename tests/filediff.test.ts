@@ -43,9 +43,9 @@ describe('fileChangeResultLine', () => {
   });
 
   it('modified: "Updated path with A additions and R removals", singular correct', () => {
-    expect(
-      fileChangeResultLine({ before: 'a\nb\nc\n', after: 'a\nX\nc\n', path: 'f.ts' }),
-    ).toBe('Updated f.ts with 1 addition and 1 removal');
+    expect(fileChangeResultLine({ before: 'a\nb\nc\n', after: 'a\nX\nc\n', path: 'f.ts' })).toBe(
+      'Updated f.ts with 1 addition and 1 removal',
+    );
     expect(
       fileChangeResultLine({ before: 'a\nb\nc\nd\n', after: 'a\nX\nY\nc\n', path: 'f.ts' }),
     ).toBe('Updated f.ts with 2 additions and 2 removals');
@@ -59,7 +59,11 @@ describe('fileChangeResultLine', () => {
   it('a no-op overwrite and binary content return undefined (summary fallback)', () => {
     expect(fileChangeResultLine({ before: 'same\n', after: 'same\n', path: 'f' })).toBeUndefined();
     expect(
-      fileChangeResultLine({ before: 'a\n', after: 'a\n' + String.fromCharCode(0) + 'x\n', path: 'f' }),
+      fileChangeResultLine({
+        before: 'a\n',
+        after: 'a\n' + String.fromCharCode(0) + 'x\n',
+        path: 'f',
+      }),
     ).toBeUndefined();
   });
 });
@@ -118,22 +122,15 @@ describe('renderFileChangeRows — created', () => {
 });
 
 describe('renderFileChangeRows — modified', () => {
-  const before = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n']
-    .join('\n') + '\n';
+  const before =
+    ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n'].join('\n') + '\n';
 
   it('single hunk: del rows carry old numbers, add/ctx new numbers', () => {
     const after = before.replace('b\n', 'B\n');
     const r = renderFileChangeRows({ before, after, path: 'f.ts' }, plain, { width: 100 });
     const rows = r!.rows.map(strip);
     // context 3 around the change at line 2 → lines 1..5
-    expect(rows).toEqual([
-      '1   a',
-      '2 - b',
-      '2 + B',
-      '3   c',
-      '4   d',
-      '5   e',
-    ]);
+    expect(rows).toEqual(['1   a', '2 - b', '2 + B', '3   c', '4   d', '5   e']);
   });
 
   it('multiple hunks are separated by a dim "..." row', () => {
@@ -241,11 +238,10 @@ describe('geometry + styling', () => {
   });
 
   it('NO_COLOR / non-TTY (level 0): zero escapes, plain +/- markers, no trailing pad', () => {
-    const r = renderFileChangeRows(
-      { before: 'a\nb\n', after: 'a\nB\n', path: 'f' },
-      plain,
-      { width: 80, scheme: 'dark' },
-    );
+    const r = renderFileChangeRows({ before: 'a\nb\n', after: 'a\nB\n', path: 'f' }, plain, {
+      width: 80,
+      scheme: 'dark',
+    });
     for (const row of r!.rows) {
       expect(row).not.toContain(ESC);
       expect(row).toBe(strip(row));
@@ -254,11 +250,10 @@ describe('geometry + styling', () => {
   });
 
   it('colored: add rows carry the dark-green bg across the full row width', () => {
-    const r = renderFileChangeRows(
-      { before: 'a\nb\nc\n', after: 'a\nB\nc\n', path: 'f' },
-      color,
-      { width: 60, scheme: 'dark' },
-    );
+    const r = renderFileChangeRows({ before: 'a\nb\nc\n', after: 'a\nB\nc\n', path: 'f' }, color, {
+      width: 60,
+      scheme: 'dark',
+    });
     const addRow = r!.rows.find((row) => strip(row).includes('+ B'))!;
     const delRow = r!.rows.find((row) => strip(row).includes('- b'))!;
     const ctxRow = r!.rows.find((row) => strip(row).trim() === '1   a')!;
@@ -273,11 +268,10 @@ describe('geometry + styling', () => {
   });
 
   it('colored: the gutter dims but the marker and code do NOT inherit it (SGR state tracking)', () => {
-    const r = renderFileChangeRows(
-      { before: 'a\nb\n', after: 'a\nB\n', path: 'f' },
-      color,
-      { width: 40, scheme: 'dark' },
-    );
+    const r = renderFileChangeRows({ before: 'a\nb\n', after: 'a\nB\n', path: 'f' }, color, {
+      width: 40,
+      scheme: 'dark',
+    });
     const addRow = r!.rows.find((row) => strip(row).includes('+ B'))!;
     // gutter: dim (2) + gray fg on the green bg
     expect(addRow).toContain('2;38;2;107;114;128;48;2;18;53;31');
@@ -288,11 +282,11 @@ describe('geometry + styling', () => {
   });
 
   it('mono diff palette on a color theme: bold markers, no hue escapes', () => {
-    const r = renderFileChangeRows(
-      { before: 'a\n', after: 'A\n', path: 'f' },
-      color,
-      { width: 60, palette: 'mono', scheme: 'dark' },
-    );
+    const r = renderFileChangeRows({ before: 'a\n', after: 'A\n', path: 'f' }, color, {
+      width: 60,
+      palette: 'mono',
+      scheme: 'dark',
+    });
     for (const row of r!.rows) {
       expect(row).not.toContain('48;2;');
       expect(row).not.toContain('38;2;');
@@ -304,10 +298,14 @@ describe('geometry + styling', () => {
 
 describe('renderFileChangeToolResult', () => {
   it('composes the result line + body for a created file', () => {
-    const r = renderFileChangeToolResult({ before: '', after: bigFile, path: 'src/new.ts' }, plain, {
-      width: 80,
-      expandHint: true,
-    });
+    const r = renderFileChangeToolResult(
+      { before: '', after: bigFile, path: 'src/new.ts' },
+      plain,
+      {
+        width: 80,
+        expandHint: true,
+      },
+    );
     expect(r!.result).toBe('Wrote 182 lines to src/new.ts');
     expect(r!.rows).toHaveLength(11);
     expect(r!.expandable).toBe(true);
@@ -373,7 +371,12 @@ describe('chatui integration', () => {
         label: 'edit_file(f.ts)',
         ok: true,
         summary: 'edited f.ts: replaced 1 occurrence (1 → 1 chars)',
-        diffPayload: { before, after: before.replace('b\n', 'B\n'), path: 'f.ts', kind: 'modified' },
+        diffPayload: {
+          before,
+          after: before.replace('b\n', 'B\n'),
+          path: 'f.ts',
+          kind: 'modified',
+        },
       },
       plain,
       { width: 80 },

@@ -63,9 +63,30 @@ function routeToolThenAnswer(name: string, args: Record<string, unknown>): void 
   const argStr = JSON.stringify(args);
   const round: string[] = [
     sse({ choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] }),
-    sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_OUT1', type: 'function', function: { name, arguments: argStr } }] }, finish_reason: null }] }),
+    sse({
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_OUT1',
+                type: 'function',
+                function: { name, arguments: argStr },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    }),
     sse({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
-    sse({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 }, gateway: { charge: '0.000100' } }),
+    sse({
+      choices: [],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      gateway: { charge: '0.000100' },
+    }),
     'data: [DONE]\n\n',
   ];
   server.setHandler((req) => {
@@ -76,7 +97,13 @@ function routeToolThenAnswer(name: string, args: Record<string, unknown>): void 
       calls += 1;
       return calls === 1
         ? { status: 200, sse: round }
-        : { status: 200, sse: [sse({ choices: [{ index: 0, delta: { content: 'done' }, finish_reason: null }] }), 'data: [DONE]\n\n'] };
+        : {
+            status: 200,
+            sse: [
+              sse({ choices: [{ index: 0, delta: { content: 'done' }, finish_reason: null }] }),
+              'data: [DONE]\n\n',
+            ],
+          };
     }
     return { status: 404, body: NOT_FOUND };
   });
@@ -245,7 +272,27 @@ describe('auto mode — outside-path auto-grant (the v0.7 Windows bug)', () => {
       let calls = 0;
       const roundFor = (id: string, p: string): string[] => [
         'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
-        sseFrame({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: p, content: 'x\n' }) } }] }, finish_reason: null }] }),
+        sseFrame({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id,
+                    type: 'function',
+                    function: {
+                      name: 'write_file',
+                      arguments: JSON.stringify({ path: p, content: 'x\n' }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        }),
         'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
         'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12},"gateway":{"charge":"0.000100"}}\n\n',
         'data: [DONE]\n\n',

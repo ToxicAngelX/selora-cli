@@ -51,7 +51,9 @@ export class ConversationView {
     this.transcript.apply({ type: 'replace', id, kind: 'user', text });
     if (this.transcript.markRendered(id)) {
       const rows = sanitizeTerminalText(text).split('\n');
-      this.surface.writeOutput(rows.map((row, i) => `${this.theme().gradient(i === 0 ? '❯' : '·')} ${row}`).join('\n'));
+      this.surface.writeOutput(
+        rows.map((row, i) => `${this.theme().gradient(i === 0 ? '❯' : '·')} ${row}`).join('\n'),
+      );
     }
   }
 
@@ -77,7 +79,12 @@ export class ConversationView {
       return;
     }
     if (event.type === 'assistant-delta') {
-      const text = this.transcript.append(event.id, 'assistant', event.text, String(event.sequence));
+      const text = this.transcript.append(
+        event.id,
+        'assistant',
+        event.text,
+        String(event.sequence),
+      );
       if (text === '') return;
       this.generated += text.length;
       this.phase = 'Responding…';
@@ -184,7 +191,10 @@ export class ConversationView {
     if (this.timer === undefined) return;
     const elapsed = Math.max(0, Math.floor((Date.now() - this.started) / 1000));
     const tokens = this.outputTokens ?? Math.ceil(this.generated / 4);
-    const count = tokens > 0 ? ` · ↓ ${this.outputTokens === undefined ? '≈' : ''}${formatCount(BigInt(tokens))} tokens` : '';
+    const count =
+      tokens > 0
+        ? ` · ↓ ${this.outputTokens === undefined ? '≈' : ''}${formatCount(BigInt(tokens))} tokens`
+        : '';
     const theme = this.theme();
     const rows: string[] = [];
     for (const pending of this.pendingTools.values()) {

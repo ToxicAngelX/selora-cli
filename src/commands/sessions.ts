@@ -26,6 +26,8 @@ import {
   sessionNameOk,
   sessionsDir,
 } from '../agent/session/store.js';
+import { themeFor } from '../ui/theme.js';
+import { loadConfig } from '../config/index.js';
 
 export interface SessionsFlags {
   yes?: boolean;
@@ -73,10 +75,16 @@ export async function runSessions(
       r.bullet(`no sessions in this project — start one: selora run --session <name> "<prompt>"`);
       return;
     }
+    const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
     r.line(`Sessions in ${sessionsDir(cwd)} (newest first):`);
     for (const s of sessions) {
-      r.field(s.name, `${s.model} · ${s.messageCount} messages · updated ${s.updatedAt}`, 0);
+      const nameStyled = theme.cyan(s.name);
+      const countBadge = theme.dim(`[${s.messageCount} msg${s.messageCount === 1 ? '' : 's'}]`);
+      const details = `${s.model} · ${s.messageCount} messages · updated ${s.updatedAt}`;
+      r.line(`  ✦ ${nameStyled} ${countBadge} — ${details}`);
     }
+    r.line();
+    r.gray(`  Resume a session: selora resume <name>`);
     return;
   }
 

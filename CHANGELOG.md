@@ -7,7 +7,7 @@
   header (`● Write(path)` / `● Update(path)` / `● Delete(path)` — dim while
   the tool runs, green on success, red on failure), a result line computed
   from the change itself (`⎿  Wrote 182 lines to path` · `⎿  Updated path
-  with 3 additions and 1 removal` · `⎿  Deleted path`), then the diff body:
+with 3 additions and 1 removal` · `⎿  Deleted path`), then the diff body:
   right-aligned line-number gutter on the LEFT (old numbers on removals, new
   on additions/context), `+`/`-` markers, 3 lines of dim context, a dim `...`
   between non-adjacent hunks, and full-width green/red backgrounds on

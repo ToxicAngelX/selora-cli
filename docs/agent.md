@@ -147,7 +147,7 @@ level of delegation — a helper cannot spawn helpers).
 - **Turn cap**: helpers run at most 12 turns (subtasks should be small; the
   parent can always spawn another helper).
 - **Activity lines**: `· sub started: …` / `sub: → read_file(x)` / `· sub
-  finished (N turns): …` stream into the parent transcript so delegation is
+finished (N turns): …` stream into the parent transcript so delegation is
   never invisible.
 - **Usage**: the helper's turns are real gateway requests; their tokens fold
   into the session totals.
@@ -184,7 +184,7 @@ project's `context.exclude` globs are enforced.
 | `git_status` / `git_diff` / `git_log` | Read-only git views via `spawn("git", args)`.                                                                                                                                                                                                                      |
 | `git_commit`                          | Stages the listed files and commits — the message is an argv element, never shell text.                                                                                                                                                                            |
 | `git_restore`                         | `git checkout -- <path>` for exactly one path.                                                                                                                                                                                                                     |
-| `spawn_agent` (v1.0)                  | Delegates a self-contained task to a nested agent loop (a helper agent). The task string is all the helper sees; it returns its final report as text. Same cwd, same permission prompts, no nested `spawn_agent`. Optional `tools: [...]` restricts its toolset. |
+| `spawn_agent` (v1.0)                  | Delegates a self-contained task to a nested agent loop (a helper agent). The task string is all the helper sees; it returns its final report as text. Same cwd, same permission prompts, no nested `spawn_agent`. Optional `tools: [...]` restricts its toolset.   |
 
 **Windows:** `run_command` refuses by default — opt in per project with
 `"agent": {"allowWindowsCmd": true}` in `selora.json` (it then spawns

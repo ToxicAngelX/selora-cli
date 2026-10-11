@@ -290,9 +290,7 @@ export function filterHistoryItems(
   const f = filter.toLowerCase();
   const matches = f === '' ? [...pool] : pool.filter((p) => p.toLowerCase().includes(f));
   return {
-    items: matches
-      .slice(0, cap)
-      .map((p) => ({ label: p, insert: p, kind: 'history' as const })),
+    items: matches.slice(0, cap).map((p) => ({ label: p, insert: p, kind: 'history' as const })),
     total: matches.length,
   };
 }

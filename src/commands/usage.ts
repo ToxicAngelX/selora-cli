@@ -148,6 +148,38 @@ export async function runUsage(ctx: CliContext, flags: UsageFlags): Promise<void
       });
     }
 
+    if (ranges.length === 1 && responses[0]!.summary.length > 0) {
+      r.line('');
+      r.line('Daily breakdown');
+      r.divider();
+      const rows = responses[0]!.summary.map((row) => ({
+        date: row.date,
+        requests: DIGITS_RE.test(row.total_requests)
+          ? formatCount(BigInt(row.total_requests))
+          : '0',
+        tokensIn: DIGITS_RE.test(row.total_input_tokens)
+          ? formatTokensCompact(BigInt(row.total_input_tokens))
+          : '0',
+        tokensOut: DIGITS_RE.test(row.total_output_tokens)
+          ? formatTokensCompact(BigInt(row.total_output_tokens))
+          : '0',
+        spend: formatUsd(row.total_spend),
+      }));
+      const wDate = Math.max(10, ...rows.map((x) => x.date.length)) + 2;
+      const wReq = Math.max(8, ...rows.map((x) => x.requests.length)) + 2;
+      const wIn = Math.max(9, ...rows.map((x) => x.tokensIn.length)) + 2;
+      const wOut = Math.max(10, ...rows.map((x) => x.tokensOut.length)) + 2;
+      const wSpend = Math.max(7, ...rows.map((x) => x.spend.length)) + 2;
+      r.gray(
+        `${'DATE'.padEnd(wDate)}${'REQUESTS'.padStart(wReq)}${'TOKENS IN'.padStart(wIn)}${'TOKENS OUT'.padStart(wOut)}${'SPEND'.padStart(wSpend)}`,
+      );
+      for (const row of rows) {
+        r.line(
+          `${row.date.padEnd(wDate)}${row.requests.padStart(wReq)}${row.tokensIn.padStart(wIn)}${row.tokensOut.padStart(wOut)}${row.spend.padStart(wSpend)}`,
+        );
+      }
+    }
+
     if (flags.byModel === true) {
       const byModel = responses[0]!.by_model;
       if (byModel.length > 0) {
@@ -156,10 +188,11 @@ export async function runUsage(ctx: CliContext, flags: UsageFlags): Promise<void
         r.divider();
         const wModel = Math.max(6, ...byModel.map((m) => m.model_id.length)) + 2;
         const wReq = Math.max(9, ...byModel.map((m) => formatCount(BigInt(m.requests)).length)) + 2;
-        r.gray(`${'MODEL'.padEnd(wModel)}${'REQUESTS'.padStart(wReq)} SPEND`);
+        const wSpend = Math.max(5, ...byModel.map((m) => formatUsd(m.spend).length)) + 2;
+        r.gray(`${'MODEL'.padEnd(wModel)}${'REQUESTS'.padStart(wReq)}${'SPEND'.padStart(wSpend)}`);
         for (const m of byModel) {
           r.line(
-            `${m.model_id.padEnd(wModel)}${formatCount(BigInt(m.requests)).padStart(wReq)} ${formatUsd(m.spend)}`,
+            `${m.model_id.padEnd(wModel)}${formatCount(BigInt(m.requests)).padStart(wReq)}${formatUsd(m.spend).padStart(wSpend)}`,
           );
         }
       }

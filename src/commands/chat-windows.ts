@@ -210,9 +210,7 @@ export interface WindowsTrackerDeps {
 export class WindowsTracker {
   private state: WindowsResponse | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private inflight:
-    | { promise: Promise<WindowsResponse>; abort: () => void }
-    | undefined;
+  private inflight: { promise: Promise<WindowsResponse>; abort: () => void } | undefined;
   private failureLogged = false;
   private stopped = true;
 

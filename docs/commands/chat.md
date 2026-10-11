@@ -271,7 +271,6 @@ percent is the weekly window used/limit, rounded to the nearest 1%.
   used/limit/remaining, request counts, the reset clock in local time, and
   the enforced/exhausted/unlimited flags as words.
 
-
 ## Ctrl+C behavior
 
 - **During a stream**: aborts the in-flight request, prints

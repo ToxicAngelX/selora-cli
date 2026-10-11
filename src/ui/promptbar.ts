@@ -56,7 +56,9 @@ export class PromptBuffer {
 
   setValue(value: string, cursor = value.length): void {
     // Map offsets through CRLF normalization and control removal as well.
-    const prefix = normalizePromptPaste(value.slice(0, Math.max(0, Math.min(cursor, value.length))));
+    const prefix = normalizePromptPaste(
+      value.slice(0, Math.max(0, Math.min(cursor, value.length))),
+    );
     this.value = normalizePromptPaste(value);
     this.cursor = boundary(this.value, prefix.length);
     this.preferredColumn = undefined;
@@ -90,7 +92,9 @@ export class PromptBuffer {
   }
 
   moveLeft(): void {
-    const previous = promptGraphemes(this.value).filter((g) => g.index < this.cursor).at(-1);
+    const previous = promptGraphemes(this.value)
+      .filter((g) => g.index < this.cursor)
+      .at(-1);
     this.cursor = previous?.index ?? 0;
     this.preferredColumn = undefined;
   }
@@ -195,7 +199,8 @@ export class PromptBuffer {
         this.preferredColumn += cellWidth(g.segment, this.preferredColumn);
       }
     }
-    const targetStart = delta === -1 ? (start <= 1 ? 0 : this.value.lastIndexOf('\n', start - 2) + 1) : end + 1;
+    const targetStart =
+      delta === -1 ? (start <= 1 ? 0 : this.value.lastIndexOf('\n', start - 2) + 1) : end + 1;
     const targetEnd = delta === -1 ? start - 1 : this.value.indexOf('\n', targetStart);
     const logical = this.value.slice(targetStart, targetEnd === -1 ? undefined : targetEnd);
     let column = 0;
@@ -224,7 +229,11 @@ export interface PromptLayout {
 }
 
 /** Wrap whole graphemes; tabs use deterministic four-cell stops. */
-export function layoutPromptValue(value: string, width: number, cursor = value.length): PromptLayout {
+export function layoutPromptValue(
+  value: string,
+  width: number,
+  cursor = value.length,
+): PromptLayout {
   const text = normalizePromptPaste(value);
   const max = Math.max(1, Math.floor(width));
   const at = boundary(text, normalizePromptPaste(value.slice(0, cursor)).length);

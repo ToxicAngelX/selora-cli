@@ -14,7 +14,7 @@
 
 import { sampleGradient, type Theme } from './theme.js';
 
-export const SPINNER_FRAMES: readonly string[] = ['✦', '✧', '⋆', '˚'];
+export const SPINNER_FRAMES: readonly string[] = ['✦', '✧', '⋆', '˚', '⋆', '✧'];
 
 export const SPINNER_WORDS: readonly string[] = [
   'Orbiting…',
@@ -30,6 +30,18 @@ export const SPINNER_WORDS: readonly string[] = [
 ];
 
 const CLEAR_LINE = '\r\x1b[2K';
+
+/** Smooth neon violet / cyan continuous loop */
+export const NEON_SHIMMER_STOPS: readonly string[] = [
+  '#c084fc', // bright neon violet
+  '#a855f7', // neon violet
+  '#818cf8', // neon indigo
+  '#38bdf8', // neon sky
+  '#22d3ee', // neon cyan
+  '#38bdf8', // neon sky
+  '#818cf8', // neon indigo
+  '#a855f7', // neon violet
+];
 
 /**
  * Line discipline between the in-place spinner and everything else that
@@ -74,10 +86,20 @@ export class SpinnerArbiter {
  * theme is disabled. The rotation wraps (modulo), so a seam travels through
  * the word — it reads as moving energy, which is the point.
  */
-export function shimmerText(theme: Theme, text: string, offset: number): string {
+export function shimmerText(
+  theme: Theme,
+  text: string,
+  offset: number,
+  stops?: readonly string[],
+): string {
   if (theme.level === 0 || text === '') return text;
   const chars = Array.from(text); // code points — never split a surrogate pair
   if (chars.length === 0) return text;
+  const gradientStops =
+    stops ??
+    (theme.palette.name === 'galaxy'
+      ? ['#a855f7', '#818cf8', '#22d3ee', '#818cf8', '#a855f7']
+      : theme.palette.gradient);
   let out = '';
   for (let i = 0; i < chars.length; i += 1) {
     const ch = chars[i]!;
@@ -86,7 +108,7 @@ export function shimmerText(theme: Theme, text: string, offset: number): string 
       continue;
     }
     const t = chars.length <= 1 ? 0 : ((i + offset) % chars.length) / (chars.length - 1);
-    out += theme.wrap(sampleGradient(theme.palette.gradient, t), ch);
+    out += theme.wrap(sampleGradient(gradientStops, t), ch);
   }
   return out;
 }
@@ -95,6 +117,8 @@ export interface SpinnerOptions {
   theme?: Theme | undefined;
   /** Words to rotate through (default SPINNER_WORDS). */
   words?: readonly string[];
+  /** Kinetic glyph frames (default SPINNER_FRAMES). */
+  frames?: readonly string[];
   /** Redraw interval in ms (default 150). */
   intervalMs?: number;
   /** Honest token count so far (previous turns); undefined = not shown. */
@@ -110,6 +134,7 @@ export class Spinner {
   private readonly io: SpinnerIo;
   private readonly theme: Theme | undefined;
   private readonly words: readonly string[];
+  private readonly frames: readonly string[];
   private readonly intervalMs: number;
   private readonly tokenSource: (() => number | undefined) | undefined;
   private timer: NodeJS.Timeout | undefined;
@@ -127,6 +152,7 @@ export class Spinner {
     this.io = io;
     this.theme = opts.theme;
     this.words = opts.words ?? SPINNER_WORDS;
+    this.frames = opts.frames ?? SPINNER_FRAMES;
     this.intervalMs = opts.intervalMs ?? 150;
     this.tokenSource = opts.tokenSource;
   }
@@ -168,7 +194,7 @@ export class Spinner {
 
   private draw(): void {
     const t = this.theme;
-    const frameChar = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]!;
+    const frameChar = this.frames[this.frame % this.frames.length]!;
     // The word changes ~every 24 frames (3.5s at 150ms) — unless pinned.
     const word = this.fixedWord ?? this.words[Math.floor(this.frame / 24) % this.words.length]!;
     const elapsed = Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000));
@@ -177,10 +203,26 @@ export class Spinner {
       tokens !== undefined && tokens > 0
         ? `${elapsed}s · ${tokens.toLocaleString('en-US')} tokens · ctrl+c to interrupt`
         : `${elapsed}s · ctrl+c to interrupt`;
-    const line =
-      t !== undefined
-        ? `${t.violet(frameChar)} ${shimmerText(t, word, this.frame)} ${t.dim(meta)}`
-        : `${frameChar} ${word} ${meta}`;
+
+    let line: string;
+    if (t !== undefined && t.enabled) {
+      // Sleek neon violet / cyan kinetic shimmer on the frame glyph
+      const glyphColor = sampleGradient(NEON_SHIMMER_STOPS, (this.frame % 12) / 11);
+      const styledFrame = t.wrap(glyphColor, frameChar, { bold: true });
+      const shimmerWord = shimmerText(t, word, this.frame);
+      const elapsedBadge = t.cyan(`${elapsed}s`);
+      const tokenBadge =
+        tokens !== undefined && tokens > 0
+          ? `${t.dim('·')} ${t.violet(`${tokens.toLocaleString('en-US')} tokens`)} `
+          : '';
+      const hint = t.dim('· ctrl+c to interrupt');
+      line = `${styledFrame} ${shimmerWord} ${elapsedBadge} ${tokenBadge}${hint}`.replace(
+        /\s+/g,
+        ' ',
+      );
+    } else {
+      line = `${frameChar} ${word} ${meta}`;
+    }
     this.io.write(`${CLEAR_LINE}${line}`);
     this.visible = true;
   }

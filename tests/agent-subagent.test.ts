@@ -51,7 +51,12 @@ const FAKE_KEY = 'sk-gw-TEST_SUBAGENT';
 import { SeloraClient } from '../src/api/client.js';
 
 function makeClient(): SeloraClient {
-  return new SeloraClient({ baseUrl: server.url, apiKey: FAKE_KEY, debug: false, logger: () => {} });
+  return new SeloraClient({
+    baseUrl: server.url,
+    apiKey: FAKE_KEY,
+    debug: false,
+    logger: () => {},
+  });
 }
 
 function tempProject(): string {
@@ -74,9 +79,9 @@ function sseText(text: string, totalTokens = 30): unknown[] {
 }
 
 function framesToSse(frames: unknown[]): string[] {
-  return frames.map((f) =>
-    typeof f === 'string' ? f : `data: ${JSON.stringify(f)}`,
-  ).map((s) => (s.endsWith('\n\n') ? s : `${s}\n\n`));
+  return frames
+    .map((f) => (typeof f === 'string' ? f : `data: ${JSON.stringify(f)}`))
+    .map((s) => (s.endsWith('\n\n') ? s : `${s}\n\n`));
 }
 
 describe('spawn_agent tool', () => {
@@ -91,10 +96,7 @@ describe('spawn_agent tool', () => {
       parentTools: builtinTools(),
     });
     server.requests.length = 0;
-    const res = await tool.run(
-      { task: 'count the TODOs' },
-      { cwd: tempProject(), dryRun: true },
-    );
+    const res = await tool.run({ task: 'count the TODOs' }, { cwd: tempProject(), dryRun: true });
     expect(res.ok).toBe(true);
     expect(res.summary).toContain('helper agent');
     expect(res.preview).toContain('task: count the TODOs');
@@ -164,7 +166,11 @@ describe('spawn_agent tool', () => {
         status: 200,
         sse: framesToSse([
           { choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] },
-          { choices: [{ index: 0, delta: { content: 'The helper found 3 TODOs.' }, finish_reason: null }] },
+          {
+            choices: [
+              { index: 0, delta: { content: 'The helper found 3 TODOs.' }, finish_reason: null },
+            ],
+          },
           { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
           {
             choices: [],
@@ -297,7 +303,10 @@ describe('spawn_agent tool', () => {
   });
 
   it('a network failure inside the sub is an honest {ok:false}, not a crash', async () => {
-    server.setHandler(() => ({ status: 500, body: '{"error":{"code":"server","message":"boom"}}' }));
+    server.setHandler(() => ({
+      status: 500,
+      body: '{"error":{"code":"server","message":"boom"}}',
+    }));
     const tool = makeSubagentTool({
       client: makeClient(),
       model: () => 'm',
@@ -372,10 +381,7 @@ describe('spawn_agent tool', () => {
       autoApprove: false,
       parentTools: builtinTools(),
     });
-    const res = await tool.run(
-      { task: 'DENY-MARKER try to write' },
-      { cwd, dryRun: false },
-    );
+    const res = await tool.run({ task: 'DENY-MARKER try to write' }, { cwd, dryRun: false });
     expect(res.ok).toBe(true); // the sub finished; its report says denied
     expect(res.content).toContain('denied');
   });

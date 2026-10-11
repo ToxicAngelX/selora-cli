@@ -5,7 +5,11 @@ import { TerminalSurface, clipSurfaceLine } from '../src/ui/terminal-surface.js'
 function harness(cols = 20, rows = 8) {
   const writes: string[] = [];
   const size = { cols, rows };
-  const surface = new TerminalSurface({ write: (s) => writes.push(s), cols: () => size.cols, rows: () => size.rows });
+  const surface = new TerminalSurface({
+    write: (s) => writes.push(s),
+    cols: () => size.cols,
+    rows: () => size.rows,
+  });
   return { writes, size, surface };
 }
 
@@ -16,16 +20,24 @@ function terminal(cols: number, rows: number) {
   let row = rows - 1;
   let col = 0;
   return {
-    screen, scrollback,
-    get cursor() { return { row, col }; },
+    screen,
+    scrollback,
+    get cursor() {
+      return { row, col };
+    },
     feed(text: string) {
       const esc = String.fromCharCode(27);
-      const tokens = text.match(new RegExp(`${esc}\\[[0-?]*[ -/]*[@-~]|\\r|\\n|[^${esc}\\r\\n]+`, 'g')) ?? [];
+      const tokens =
+        text.match(new RegExp(`${esc}\\[[0-?]*[ -/]*[@-~]|\\r|\\n|[^${esc}\\r\\n]+`, 'g')) ?? [];
       for (const token of tokens) {
         if (token === '\r') col = 0;
         else if (token === '\n') {
           row += 1;
-          if (row === rows) { scrollback.push(screen.shift()!); screen.push(''); row -= 1; }
+          if (row === rows) {
+            scrollback.push(screen.shift()!);
+            screen.push('');
+            row -= 1;
+          }
         } else if (token.startsWith('\x1b[')) {
           const match = new RegExp(`^${String.fromCharCode(27)}\\[(\\d*)([ABCK])$`).exec(token);
           if (match !== null) {
@@ -75,20 +87,28 @@ describe('TerminalSurface', () => {
   it('keeps the draft cursor correct while live output grows, shrinks, and commits', () => {
     const { surface, writes } = harness(20, 8);
     const tty = terminal(20, 8);
-    const flush = () => { while (writes.length) tty.feed(writes.shift()!); };
-    surface.setPrompt({ lines: ['draft', 'footer'], cursor: { row: 0, col: 3 } }); flush();
-    surface.setLive(['one', 'two', 'three']); flush();
+    const flush = () => {
+      while (writes.length) tty.feed(writes.shift()!);
+    };
+    surface.setPrompt({ lines: ['draft', 'footer'], cursor: { row: 0, col: 3 } });
+    flush();
+    surface.setLive(['one', 'two', 'three']);
+    flush();
     expect(tty.screen[tty.cursor.row]).toBe('draft');
     expect(tty.cursor.col).toBe(3);
-    surface.setLive(['last']); flush();
+    surface.setLive(['last']);
+    flush();
     expect(tty.screen[tty.cursor.row]).toBe('draft');
-    surface.commitLive(); flush();
+    surface.commitLive();
+    flush();
     expect(tty.screen[tty.cursor.row]).toBe('draft');
     expect(tty.screen.filter((line) => line === 'last')).toHaveLength(1);
-    surface.writeOutput('transcript\n'); flush();
+    surface.writeOutput('transcript\n');
+    flush();
     expect(tty.screen[tty.cursor.row]).toBe('draft');
     expect(tty.cursor.col).toBe(3);
-    surface.writeOutput('scroll\n'.repeat(20)); flush();
+    surface.writeOutput('scroll\n'.repeat(20));
+    flush();
     expect(tty.scrollback).toContain('transcript');
     expect(tty.screen[tty.cursor.row]).toBe('draft');
   });
@@ -96,14 +116,26 @@ describe('TerminalSurface', () => {
   it('clears only owned rows and makes suspend/resume/dispose idempotent', () => {
     const { surface, writes, size } = harness();
     surface.setPrompt({ lines: ['draft'], cursor: { row: 0, col: 2 } });
-    surface.suspend(); const n = writes.length;
-    surface.suspend(); surface.setLive(['stream']); expect(writes).toHaveLength(n);
-    surface.resume(); const resumed = writes.length;
-    surface.resume(); expect(writes).toHaveLength(resumed);
-    size.rows = 3; surface.resize();
-    expect((writes.at(-1)!.match(new RegExp(`${String.fromCharCode(27)}\\[2K`, 'g')) ?? []).length).toBeLessThanOrEqual(1);
-    surface.dispose(); const disposed = writes.length;
-    surface.dispose(); surface.resume(); surface.setLive(['ignored']); surface.writeOutput('ignored');
+    surface.suspend();
+    const n = writes.length;
+    surface.suspend();
+    surface.setLive(['stream']);
+    expect(writes).toHaveLength(n);
+    surface.resume();
+    const resumed = writes.length;
+    surface.resume();
+    expect(writes).toHaveLength(resumed);
+    size.rows = 3;
+    surface.resize();
+    expect(
+      (writes.at(-1)!.match(new RegExp(`${String.fromCharCode(27)}\\[2K`, 'g')) ?? []).length,
+    ).toBeLessThanOrEqual(1);
+    surface.dispose();
+    const disposed = writes.length;
+    surface.dispose();
+    surface.resume();
+    surface.setLive(['ignored']);
+    surface.writeOutput('ignored');
     expect(writes).toHaveLength(disposed);
   });
 });

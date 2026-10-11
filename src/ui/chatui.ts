@@ -18,6 +18,8 @@ import type { DiffStyle } from './diff.js';
 import type { ColorScheme, DiffPaletteName } from '../diff/types.js';
 import { renderFileChangeToolResult, type FileChangePayload } from './filediff.js';
 import { sanitizeTerminalText, terminalTextWidth, truncateTerminalText } from './terminal-text.js';
+import { formatCount } from '../format.js';
+import { formatChatCost } from '../commands/chat-footer.js';
 
 /** Tool name → display name (read_file → Read). Unknown → capitalized. */
 const TOOL_DISPLAY: Readonly<Record<string, string>> = {
@@ -139,8 +141,11 @@ export function renderToolResult(
         fileChange: {
           expanded: false,
           render: (expanded: boolean) =>
-            renderFileChangeToolResult(payload, theme, { ...renderOpts, expanded, expandHint: true })
-              ?.rows ?? [],
+            renderFileChangeToolResult(payload, theme, {
+              ...renderOpts,
+              expanded,
+              expandHint: true,
+            })?.rows ?? [],
         },
       };
     }
@@ -222,4 +227,124 @@ export function diffStyleFor(theme: Theme): DiffStyle {
     meta: (text) => theme.dim(text),
     lineNo: (n) => theme.dim(String(n).padStart(3, ' ')),
   };
+}
+
+/**
+ * Modern rounded chip / card for tool execution notice:
+ * ╭─── Tool: fs.readFile ───╮
+ * or with arguments:
+ * ╭─── Tool: read_file ─────────────╮
+ * │  src/index.ts                   │
+ * ╰─────────────────────────────────╯
+ */
+export function renderToolCard(name: string, label: string, theme: Theme, maxWidth = 80): string[] {
+  const safeName = sanitizeTerminalText(name);
+  const safeLabel = sanitizeTerminalText(label);
+  let args = '';
+  if (safeLabel.startsWith(`${safeName}(`) && safeLabel.endsWith(')')) {
+    args = safeLabel.slice(safeName.length + 1, -1).trim();
+  } else if (safeLabel !== safeName) {
+    args = safeLabel;
+  }
+
+  const columns = Math.max(30, Math.min(maxWidth, 80));
+  const titlePlain = `Tool: ${safeName}`;
+
+  if (args === '') {
+    // Compact rounded chip
+    const top = `${theme.dim('╭─── ')}${theme.star('Tool: ')}${theme.cyan(safeName)}${theme.dim(' ───╮')}`;
+    const bottom = `${theme.dim('╰' + '─'.repeat(titlePlain.length + 8) + '╯')}`;
+    return [top, bottom];
+  }
+
+  const boxWidth = Math.min(
+    columns,
+    Math.max(titlePlain.length + 10, terminalTextWidth(args) + 6, 36),
+  );
+  const innerWidth = boxWidth - 2;
+  const dashes = Math.max(3, innerWidth - titlePlain.length - 4);
+  const top = `${theme.dim('╭─── ')}${theme.star('Tool: ')}${theme.cyan(safeName)} ${theme.dim('─'.repeat(dashes) + '╮')}`;
+
+  const lines = args.split('\n').filter((l) => l.trim() !== '');
+  const shown = lines.slice(0, 3);
+  const bodyRows: string[] = [];
+  for (const line of shown) {
+    const truncated = truncateTerminalText(line.trim(), innerWidth - 4);
+    const pad = Math.max(0, innerWidth - 4 - terminalTextWidth(truncated));
+    bodyRows.push(
+      `${theme.dim('│')}  ${theme.star(truncated)}${' '.repeat(pad)}  ${theme.dim('│')}`,
+    );
+  }
+  if (lines.length > 3) {
+    const more = `… +${lines.length - 3} lines`;
+    const pad = Math.max(0, innerWidth - 4 - terminalTextWidth(more));
+    bodyRows.push(`${theme.dim('│')}  ${theme.dim(more)}${' '.repeat(pad)}  ${theme.dim('│')}`);
+  }
+  const bottom = theme.dim(`╰${'─'.repeat(innerWidth)}╯`);
+  return [top, ...bodyRows, bottom];
+}
+
+export interface RunSummaryData {
+  turns: number;
+  totalTokens: number;
+  promptTokens?: number | undefined;
+  completionTokens?: number | undefined;
+  charge?: string | undefined;
+}
+
+export function renderRunSummaryCard(data: RunSummaryData, theme: Theme, maxWidth = 80): string[] {
+  const width = Math.min(Math.max(maxWidth - 4, 38), 60);
+  const innerWidth = width - 2;
+  const title = ' Agent Run Summary ';
+  const leftDashes = 3;
+  const rightDashes = Math.max(3, innerWidth - title.length - leftDashes);
+  const top = `${theme.dim('╭' + '─'.repeat(leftDashes))}${theme.star(theme.bold(title))}${theme.dim('─'.repeat(rightDashes) + '╮')}`;
+
+  const rows: Array<{ label: string; value: string; styledVal: string }> = [
+    {
+      label: 'Turns:',
+      value: `${formatCount(BigInt(data.turns))} turn${data.turns === 1 ? '' : 's'}`,
+      styledVal: theme.star(
+        `${formatCount(BigInt(data.turns))} turn${data.turns === 1 ? '' : 's'}`,
+      ),
+    },
+  ];
+
+  let tokenStr = formatCount(BigInt(data.totalTokens));
+  if (
+    data.promptTokens !== undefined &&
+    data.completionTokens !== undefined &&
+    data.promptTokens > 0
+  ) {
+    tokenStr += ` (${formatCount(BigInt(data.promptTokens))} prompt · ${formatCount(BigInt(data.completionTokens))} comp)`;
+  }
+  rows.push({
+    label: 'Tokens:',
+    value: tokenStr,
+    styledVal: theme.cyan(tokenStr),
+  });
+
+  if (data.charge !== undefined && data.charge !== '') {
+    const costFormatted = formatChatCost(data.charge);
+    rows.push({
+      label: 'Cost:',
+      value: costFormatted,
+      styledVal: theme.success(costFormatted),
+    });
+  }
+
+  const out: string[] = [top];
+  for (const r of rows) {
+    const labelCol = r.label.padEnd(8, ' ');
+    const maxValWidth = innerWidth - 4 - 8;
+    const truncatedVal = truncateTerminalText(r.value, maxValWidth);
+    const valWidth = terminalTextWidth(truncatedVal);
+    const rightPad = Math.max(0, maxValWidth - valWidth);
+    const valRender = truncatedVal === r.value ? r.styledVal : theme.star(truncatedVal);
+    out.push(
+      `${theme.dim('│')}  ${theme.dim(labelCol)}${valRender}${' '.repeat(rightPad)}  ${theme.dim('│')}`,
+    );
+  }
+  out.push(theme.dim(`╰${'─'.repeat(innerWidth)}╯`));
+  return out;
 }

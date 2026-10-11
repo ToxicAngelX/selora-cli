@@ -19,6 +19,9 @@ import type { CliContext } from '../context.js';
 import { Renderer } from '../terminal/render.js';
 import { listSessions, loadSession, sessionNameOk } from '../agent/session/store.js';
 import { runChat } from './chat.js';
+import { pickFromList, rawCapable } from '../ui/promptmenu.js';
+import { themeFor } from '../ui/theme.js';
+import { loadConfig } from '../config/index.js';
 
 export interface ResumeFlags {
   model?: string | undefined;
@@ -83,6 +86,50 @@ export async function runResume(
       return;
     }
     target = sessions[0]!.name;
+    if (sessions.length > 1 && ctx.io.isTTY && !ctx.json && rawCapable(ctx.io.stdin)) {
+      const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+      const items = sessions.map((s) => ({
+        label: s.name,
+        hint: `${s.messageCount} msg${s.messageCount === 1 ? '' : 's'} · ${s.model} · updated ${s.updatedAt}`,
+      }));
+      const picked = await pickFromList(
+        'Select a session to resume (↑/↓ · Enter to confirm · Esc for most recent):',
+        items,
+        0,
+        {
+          stdin: ctx.io.stdin,
+          write: ctx.io.writeErr,
+          pauseInput: () => {},
+          resumeInput: () => {},
+          theme,
+        },
+      );
+      if (picked !== null && picked >= 0 && picked < sessions.length) {
+        target = sessions[picked]!.name;
+      }
+    }
+  }
+
+  if (ctx.io.isTTY && !ctx.json) {
+    const s = loadSession(cwd, target);
+    if (s !== null) {
+      const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+      const badge = `Resumed session "${s.name}" — ${s.messages.length} messages restored`;
+      r.line(theme.cyan('╭─ Resume Session ──────────────────────────────────╮'));
+      r.line(theme.cyan('│') + `  Session:   ${theme.star(s.name.padEnd(38))}` + theme.cyan('│'));
+      r.line(theme.cyan('│') + `  Model:     ${theme.dim(s.model.padEnd(38))}` + theme.cyan('│'));
+      r.line(
+        theme.cyan('│') +
+          `  Messages:  ${theme.success(String(s.messages.length).padEnd(38))}` +
+          theme.cyan('│'),
+      );
+      r.line(
+        theme.cyan('│') +
+          `  Badge:     ${theme.cyan((badge.length > 38 ? badge.slice(0, 37) + '…' : badge).padEnd(38))}` +
+          theme.cyan('│'),
+      );
+      r.line(theme.cyan('╰───────────────────────────────────────────────────╯'));
+    }
   }
 
   await runChat(ctx, {

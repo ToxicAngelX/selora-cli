@@ -139,8 +139,7 @@ describe('compactBarFor (the animated critical bar)', () => {
 
 describe('maybeCompact', () => {
   let server: MockServer;
-  const client = (): SeloraClient =>
-    new SeloraClient({ baseUrl: server.url, apiKey: 'sk-test' });
+  const client = (): SeloraClient => new SeloraClient({ baseUrl: server.url, apiKey: 'sk-test' });
 
   function longHistory(): ChatMessage[] {
     const h: ChatMessage[] = [];
@@ -187,9 +186,7 @@ describe('maybeCompact', () => {
       // marker is message[0], role user, with the compact marker text
       const marker = res.messages[0]!;
       expect(marker.role).toBe('user');
-      expect(typeof marker.content === 'string' ? marker.content : '').toContain(
-        'compact',
-      );
+      expect(typeof marker.content === 'string' ? marker.content : '').toContain('compact');
       // the kept tail length: original - folded + 1 marker
       expect(res.messages.length).toBe(h.length - res.folded + 1);
       // the tail is verbatim (identity)

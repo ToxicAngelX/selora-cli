@@ -284,11 +284,14 @@ export async function runRun(
     root: cwd,
     maxBytes: diffConfig.historyMaxSizeMB * 1024 * 1024,
   });
+  const termWidth = (): number =>
+    process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
+
   // v1.5: flat Claude-Code-style rows (ui/filediff.ts) — the same renderer the
   // tool-result display uses, so the prompt preview and the transcript agree.
   const renderDiff = (before: string, after: string, path?: string): readonly string[] => {
     const rendered = renderFileChangeRows({ before, after, path }, theme, {
-      width: process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80,
+      width: termWidth(),
       context: diffConfig.context,
       palette: diffConfig.palette,
     });

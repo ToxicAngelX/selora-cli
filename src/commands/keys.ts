@@ -9,7 +9,7 @@
  */
 
 import type { CliContext } from '../context.js';
-import { resolveSettings } from '../config/index.js';
+import { loadConfig, resolveSettings } from '../config/index.js';
 import { SeloraClient } from '../api/client.js';
 import { SeloraApiError } from '../api/errors.js';
 import { createKey, deleteKey, listKeys, type ApiKey } from '../api/endpoints/me.js';
@@ -18,6 +18,7 @@ import { suggestedKeyName } from '../auth/keyname.js';
 import { getStoredKey } from '../auth/storage.js';
 import { Renderer } from '../terminal/render.js';
 import { formatCount } from '../format.js';
+import { themeFor } from '../ui/theme.js';
 
 const KEY_NAME_MAX = 120;
 /** The backend one-time-secret warning, used when the response omits `note`. */
@@ -83,6 +84,7 @@ async function keysList(ctx: CliContext, r: Renderer): Promise<void> {
   const settings = resolveSettings();
   const baseUrl = ctx.apiUrl ?? settings.apiUrl;
   const client = newClient(ctx, baseUrl);
+  const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
   try {
     const keys = await listKeys(client);
     if (ctx.json) {
@@ -95,27 +97,53 @@ async function keysList(ctx: CliContext, r: Renderer): Promise<void> {
       r.line('No API keys — create one with: selora keys create');
       return;
     }
-    const rows = keys.map((k) => ({
-      name: k.name !== null && k.name !== '' ? k.name : '—',
-      // EXACTLY what the backend returns (last 4) — never reconstructed.
-      key: k.key_hint !== '' ? `…${k.key_hint}` : '—',
-      status: k.status !== '' ? k.status : '—',
-      created: dateOnly(k.created_at),
-      used: k.last_used_at !== null && k.last_used_at !== '' ? dateOnly(k.last_used_at) : 'never',
-      requests: formatCount(BigInt(k.request_count)),
-    }));
+    const rows = keys.map((k) => {
+      const name = k.name !== null && k.name !== '' ? k.name : '—';
+      const key = k.key_hint !== '' ? `…${k.key_hint}` : '—';
+      const statusPill =
+        k.status === 'active'
+          ? '[active]'
+          : k.status === 'revoked'
+            ? '[revoked]'
+            : k.status !== ''
+              ? `[${k.status}]`
+              : '—';
+      const created = dateOnly(k.created_at);
+      const used =
+        k.last_used_at !== null && k.last_used_at !== '' ? dateOnly(k.last_used_at) : 'never';
+      const requests = formatCount(BigInt(k.request_count));
+      return {
+        name,
+        key,
+        statusPill,
+        rawStatus: k.status,
+        created,
+        used,
+        requests,
+      };
+    });
     const wName = Math.max(4, ...rows.map((x) => x.name.length)) + 2;
     const wKey = Math.max(3, ...rows.map((x) => x.key.length)) + 2;
-    const wStatus = Math.max(6, ...rows.map((x) => x.status.length)) + 2;
+    const wStatus = Math.max(6, ...rows.map((x) => x.statusPill.length)) + 2;
     const wCreated = Math.max(7, ...rows.map((x) => x.created.length)) + 2;
     const wUsed = Math.max(9, ...rows.map((x) => x.used.length)) + 2;
     r.gray(
       `${'NAME'.padEnd(wName)}${'KEY'.padEnd(wKey)}${'STATUS'.padEnd(wStatus)}${'CREATED'.padEnd(wCreated)}${'LAST USED'.padEnd(wUsed)}REQUESTS`,
     );
     for (const row of rows) {
-      r.line(
-        `${row.name.padEnd(wName)}${row.key.padEnd(wKey)}${row.status.padEnd(wStatus)}${row.created.padEnd(wCreated)}${row.used.padEnd(wUsed)}${row.requests}`,
-      );
+      const nameCol = row.name.padEnd(wName);
+      const keyCol = theme.cyan(row.key) + ' '.repeat(Math.max(0, wKey - row.key.length));
+      const statusPillStyled =
+        row.rawStatus === 'active'
+          ? theme.success(row.statusPill)
+          : row.rawStatus === 'revoked'
+            ? theme.dim(row.statusPill)
+            : row.statusPill;
+      const statusCol = statusPillStyled + ' '.repeat(Math.max(0, wStatus - row.statusPill.length));
+      const createdCol = row.created.padEnd(wCreated);
+      const usedCol = row.used.padEnd(wUsed);
+      const requestsCol = row.requests;
+      r.line(`${nameCol}${keyCol}${statusCol}${createdCol}${usedCol}${requestsCol}`);
     }
     const revoked = keys.filter((k) => k.status === 'revoked' || k.revoked_at !== undefined);
     if (revoked.length > 0) {
@@ -182,10 +210,29 @@ async function keysCreate(ctx: CliContext, r: Renderer, flags: KeysFlags): Promi
       r.jsonOut({ ok: true, key: created.api_key, secret: created.secret, note: created.note });
       return;
     }
+    const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+    const secret = created.secret;
+    const note = created.note !== '' ? created.note : SECRET_NOTE;
+    const warnHeader = '✰ THIS IS THE ONLY TIME THE FULL KEY IS SHOWN — copy it now:';
+
+    const innerWidth = Math.max(64, secret.length + 6, warnHeader.length + 4, note.length + 6);
+    const topBorder = `╭─── Key Generated ${'─'.repeat(Math.max(0, innerWidth - 19))}╮`;
+    const bottomBorder = `╰${'─'.repeat(innerWidth)}╯`;
+
     r.ok(`Key created: ${name}`);
-    r.line('✰ THIS IS THE ONLY TIME THE FULL KEY IS SHOWN — copy it now:');
-    r.green(`  ${created.secret}`);
-    r.bullet(created.note !== '' ? created.note : SECRET_NOTE);
+    r.line(theme.warning(topBorder));
+    r.line(
+      `${theme.warning('│')}  ${theme.warning(warnHeader)}${' '.repeat(Math.max(0, innerWidth - warnHeader.length - 2))}${theme.warning('│')}`,
+    );
+    r.line(`${theme.warning('│')}${' '.repeat(innerWidth)}${theme.warning('│')}`);
+    r.line(
+      `${theme.warning('│')}    ${theme.success(secret)}${' '.repeat(Math.max(0, innerWidth - secret.length - 4))}${theme.warning('│')}`,
+    );
+    r.line(`${theme.warning('│')}${' '.repeat(innerWidth)}${theme.warning('│')}`);
+    r.line(
+      `${theme.warning('│')}  ${theme.warning(note)}${' '.repeat(Math.max(0, innerWidth - note.length - 2))}${theme.warning('│')}`,
+    );
+    r.line(theme.warning(bottomBorder));
   } catch (err) {
     if (err instanceof SeloraApiError && err.status === 409) {
       process.exitCode = 1;

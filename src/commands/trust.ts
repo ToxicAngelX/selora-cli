@@ -11,7 +11,15 @@
 
 import type { CliContext } from '../context.js';
 import { Renderer } from '../terminal/render.js';
-import { canonicalDir, loadTrustedDirs, trustDir, untrustDir } from '../config/trust.js';
+import {
+  canonicalDir,
+  homeAbbrev,
+  loadTrustedDirs,
+  trustDir,
+  untrustDir,
+} from '../config/trust.js';
+import { themeFor } from '../ui/theme.js';
+import { loadConfig } from '../config/index.js';
 
 export interface TrustFlags {
   /** 'add' | 'remove' | undefined (list). */
@@ -45,7 +53,10 @@ export async function runTrust(ctx: CliContext, flags: TrustFlags): Promise<void
       r.gray('Trust the current folder with: selora trust add .');
       return;
     }
-    for (const d of dirs) r.line(d);
+    const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+    for (const d of dirs) {
+      r.line(`${theme.cyan('❯')} ${homeAbbrev(d)}`);
+    }
     return;
   }
 

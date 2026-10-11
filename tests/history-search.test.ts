@@ -20,10 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as readline from 'node:readline';
 import { PassThrough, Writable } from 'node:stream';
-import {
-  collectPromptHistory,
-  promptTextFromMessage,
-} from '../src/agent/session/history.js';
+import { collectPromptHistory, promptTextFromMessage } from '../src/agent/session/history.js';
 import { SESSION_VERSION, sessionsDir, type StoredSession } from '../src/agent/session/store.js';
 import { filterHistoryItems, PromptRouter, type SlashCommand } from '../src/ui/promptmenu.js';
 import { themeFor } from '../src/ui/theme.js';
@@ -43,7 +40,12 @@ afterAll(() => {
 });
 
 /** Write a session file by hand (fixed updatedAt → deterministic ordering). */
-function writeSession(root: string, name: string, updatedAt: string, messages: ChatMessage[]): void {
+function writeSession(
+  root: string,
+  name: string,
+  updatedAt: string,
+  messages: ChatMessage[],
+): void {
   const body: StoredSession = {
     version: SESSION_VERSION,
     name,
@@ -170,9 +172,7 @@ describe('filterHistoryItems', () => {
       'deploy the gateway',
       'deploy the frontend',
     ]);
-    expect(filterHistoryItems(pool, 'nginx').items.map((i) => i.label)).toEqual([
-      'restart nginx',
-    ]);
+    expect(filterHistoryItems(pool, 'nginx').items.map((i) => i.label)).toEqual(['restart nginx']);
     expect(filterHistoryItems(pool, 'zzz').items).toEqual([]);
     expect(filterHistoryItems(pool, 'zzz').total).toBe(0);
   });

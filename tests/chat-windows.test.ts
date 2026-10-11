@@ -165,9 +165,7 @@ describe('windowPercent', () => {
 
 describe('windowFooterSegment', () => {
   it('renders used/limit, the reset countdown, and the week percent', () => {
-    expect(windowFooterSegment(windows(), 80)).toBe(
-      '$4.12/$10.00 · resets 2h 14m · week 22%',
-    );
+    expect(windowFooterSegment(windows(), 80)).toBe('$4.12/$10.00 · resets 2h 14m · week 22%');
   });
 
   it('renders sub-dollar used values with $0.0381-style precision', () => {
@@ -193,9 +191,7 @@ describe('windowFooterSegment', () => {
     expect(windowFooterSegment(windows({ unlimited: true }), 80)).toBe('');
     expect(windowFooterSegment(windows({ enforced: false }), 80)).toBe('');
     // unlimited wins even over an exhausted flag
-    expect(
-      windowFooterSegment(windows({ unlimited: true, exhausted: true }), 80),
-    ).toBe('');
+    expect(windowFooterSegment(windows({ unlimited: true, exhausted: true }), 80)).toBe('');
   });
 
   it('drops the week % below 60 cols, then the countdown below 40', () => {
@@ -216,9 +212,7 @@ describe('windowFooterSegment', () => {
   });
 
   it('omits the countdown when resetsInMs is 0, keeps used/limit', () => {
-    expect(windowFooterSegment(windows({ resetsInMs: 0 }), 80)).toBe(
-      '$4.12/$10.00 · week 22%',
-    );
+    expect(windowFooterSegment(windows({ resetsInMs: 0 }), 80)).toBe('$4.12/$10.00 · week 22%');
   });
 
   it('untrusted wire data omits the segment, never throws', () => {

@@ -219,7 +219,12 @@ function paintCtxFor(theme: Theme, pal: DiffPalette): PaintCtx {
 }
 
 /** One numbered code row: '<no> <marker> <code>', full-width bg on add/del. */
-function paintLineRow(row: { no: number | null; kind: 'add' | 'del' | 'ctx'; text: string }, w: number, width: number, c: PaintCtx): string {
+function paintLineRow(
+  row: { no: number | null; kind: 'add' | 'del' | 'ctx'; text: string },
+  w: number,
+  width: number,
+  c: PaintCtx,
+): string {
   const pal = c.pal;
   const isAdd = row.kind === 'add';
   const isDel = row.kind === 'del';
@@ -273,7 +278,9 @@ function paintNoteRow(text: string, c: PaintCtx): string {
 /** Elision text for a capped create/delete preview or an over-cap edit. */
 function elisionText(hidden: number, sign: '+' | '-' | '', expandHint: boolean): string {
   const hint = expandHint ? ' (ctrl+r to expand)' : '';
-  return sign === '' ? `… ${plural(hidden, 'more line')}${hint}` : `… ${sign}${plural(hidden, 'line')}${hint}`;
+  return sign === ''
+    ? `… ${plural(hidden, 'more line')}${hint}`
+    : `… ${sign}${plural(hidden, 'line')}${hint}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +310,10 @@ function previewRows(
   }));
   const hidden = lines.length - shown.length;
   if (hidden > 0) {
-    rows.push({ t: 'note', text: elisionText(hidden, kind === 'add' ? '+' : '-', opts.expandHint) });
+    rows.push({
+      t: 'note',
+      text: elisionText(hidden, kind === 'add' ? '+' : '-', opts.expandHint),
+    });
   }
   return { rows, expandable: hidden > 0 };
 }

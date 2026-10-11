@@ -640,7 +640,17 @@ async function executeToolCall(
     // the real run proceeds (one dry run, no prompt, nothing persisted).
     const probe = await previewTool(input, allows.outsideDirs());
     if (probe.outside !== undefined) allows.rememberDir(grantDirFor(probe.outside.abs));
-    return await runApproved(tool, input, label, reply, toolEvents, cb, opts, allows.outsideDirs(), probe.diff);
+    return await runApproved(
+      tool,
+      input,
+      label,
+      reply,
+      toolEvents,
+      cb,
+      opts,
+      allows.outsideDirs(),
+      probe.diff,
+    );
   }
 
   // Dry run first — its result is the permission prompt's preview, and an
@@ -825,7 +835,17 @@ async function executeToolCall(
           allows.remember(tool.kind, tool.name, label);
           cb.onActivity?.('· allowed for this session');
         }
-        return await runApproved(tool, input, label, reply, toolEvents, cb, opts, outsideDirs, dryDiff);
+        return await runApproved(
+          tool,
+          input,
+          label,
+          reply,
+          toolEvents,
+          cb,
+          opts,
+          outsideDirs,
+          dryDiff,
+        );
       }
       // 'edit' (exec tools only): replace the command, dry-run, ask again.
       throwIfCancelled(opts.signal);

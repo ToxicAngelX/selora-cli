@@ -59,7 +59,8 @@ export class TerminalSurface {
 
   setPrompt(frame: TerminalFrame | undefined): void {
     if (this.disposed) return;
-    this.promptFrame = frame === undefined ? undefined : { lines: [...frame.lines], cursor: { ...frame.cursor } };
+    this.promptFrame =
+      frame === undefined ? undefined : { lines: [...frame.lines], cursor: { ...frame.cursor } };
     this.redraw();
   }
 
@@ -133,7 +134,10 @@ export class TerminalSurface {
     const promptLength = Math.min(prompt?.lines.length ?? 0, max);
     // If an external prompt exceeds the viewport, retain its cursor row.
     const wanted = Math.max(0, Math.min(prompt?.cursor.row ?? 0, (prompt?.lines.length ?? 1) - 1));
-    const start = Math.max(0, Math.min(wanted - promptLength + 1, (prompt?.lines.length ?? 0) - promptLength));
+    const start = Math.max(
+      0,
+      Math.min(wanted - promptLength + 1, (prompt?.lines.length ?? 0) - promptLength),
+    );
     const promptLines = prompt?.lines.slice(start, start + promptLength) ?? [];
     const live = this.live.slice(-Math.max(0, max - promptLength));
     // slice(-0) is slice(0), so explicitly omit live when there is no room.
@@ -141,9 +145,13 @@ export class TerminalSurface {
     const lines = [...liveLines, ...promptLines].map((line) => clipSurfaceLine(line, width));
     return {
       lines,
-      cursor: promptLength > 0
-        ? { row: liveLines.length + wanted - start, col: Math.max(0, Math.min(prompt!.cursor.col, width)) }
-        : { row: Math.max(0, lines.length - 1), col: 0 },
+      cursor:
+        promptLength > 0
+          ? {
+              row: liveLines.length + wanted - start,
+              col: Math.max(0, Math.min(prompt!.cursor.col, width)),
+            }
+          : { row: Math.max(0, lines.length - 1), col: 0 },
     };
   }
 

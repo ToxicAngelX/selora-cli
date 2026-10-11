@@ -19,20 +19,34 @@ import {
 } from '../api/endpoints/me.js';
 import { getStoredKey } from '../auth/storage.js';
 import { Renderer } from '../terminal/render.js';
-import { formatUsd } from '../money.js';
+import { formatUsd, parseMoneyMicro } from '../money.js';
 import { daysLeft, formatDurationCompact } from '../format.js';
 
 const LABEL_WIDTH = 26;
 
+function miniMeter(remainingUsd: string, limitUsd: string, cells = 8): string {
+  const rem = parseMoneyMicro(remainingUsd);
+  const lim = parseMoneyMicro(limitUsd);
+  if (rem === null || lim === null || lim <= 0n) return '';
+  const ratio = Number(rem) / Number(lim);
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const filled = Math.round(clamped * cells);
+  const bar = '▰'.repeat(filled) + '▱'.repeat(cells - filled);
+  return `[${bar}]`;
+}
+
 function windowLine(w: SpendWindow, withReset: boolean): string {
   if (w.unlimited) return 'unlimited';
   if (w.remainingUsd === '' || w.limitUsd === '') return '—';
+  const meter = miniMeter(w.remainingUsd, w.limitUsd);
   if (w.exhausted) {
     const dur = formatDurationCompact(w.resetsInMs);
-    return dur !== '' ? `exhausted — resets in ${dur}` : 'exhausted';
+    const text = dur !== '' ? `exhausted — resets in ${dur}` : 'exhausted';
+    return meter !== '' ? `${text}  ${meter}` : text;
   }
   // enforced=false still shows the numbers — the gateway reports them either way.
   let value = `${formatUsd(w.remainingUsd)} of ${formatUsd(w.limitUsd)}`;
+  if (meter !== '') value += `  ${meter}`;
   if (withReset && w.resetsInMs > 0) {
     const dur = formatDurationCompact(w.resetsInMs);
     if (dur !== '') value += `  (resets in ${dur})`;
@@ -45,8 +59,9 @@ function planLine(me: MeResponse): string {
   if (term === null) return 'none';
   const name = term.kind === 'trial' ? 'Trial' : (term.plan_name ?? me.plan?.name ?? 'plan');
   const days = term.ends_at !== null ? daysLeft(term.ends_at) : null;
-  if (days === null) return name;
-  return `${name} — ${days} ${days === 1 ? 'day' : 'days'} left`;
+  const badge = term.kind ? `  [${term.kind}]` : '';
+  if (days === null) return `${name}${badge}`;
+  return `${name} — ${days} ${days === 1 ? 'day' : 'days'} left${badge}`;
 }
 
 function localTimeString(d: Date): string {

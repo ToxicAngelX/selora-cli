@@ -5,12 +5,14 @@ import { SeloraClient } from '../src/api/client.js';
 
 function fakeClient(events: ReadonlyArray<readonly [string, string | undefined]>): SeloraClient {
   const client = new SeloraClient({ baseUrl: 'http://localhost', apiKey: 'sk-gw-TEST' });
-  (client as unknown as {
-    requestStream: (
-      path: string,
-      opts: { onEvent: (data: string, id?: string) => void },
-    ) => Promise<void>;
-  }).requestStream = async (_path, opts) => {
+  (
+    client as unknown as {
+      requestStream: (
+        path: string,
+        opts: { onEvent: (data: string, id?: string) => void },
+      ) => Promise<void>;
+    }
+  ).requestStream = async (_path, opts) => {
     for (const [event, id] of events) opts.onEvent(event, id);
   };
   return client;

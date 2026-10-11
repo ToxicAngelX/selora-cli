@@ -12,6 +12,8 @@ import { spawn } from 'node:child_process';
 import type { CliContext } from '../context.js';
 import { VERSION } from '../version.js';
 import { Renderer } from '../terminal/render.js';
+import { themeFor } from '../ui/theme.js';
+import { loadConfig } from '../config/index.js';
 
 const REGISTRY_LATEST_URL = 'https://registry.npmjs.org/-/package/selora/dist-tags';
 
@@ -67,7 +69,12 @@ export function isNewer(a: string, b: string): boolean {
 
 export async function runUpdate(
   ctx: CliContext,
-  opts: { check?: boolean; yes?: boolean; fetchLatestVersion?: LatestVersionSource; install?: InstallRunner } = {},
+  opts: {
+    check?: boolean;
+    yes?: boolean;
+    fetchLatestVersion?: LatestVersionSource;
+    install?: InstallRunner;
+  } = {},
 ): Promise<void> {
   const r = new Renderer({ out: ctx.io.out, err: ctx.io.err, json: ctx.json, debug: ctx.debug });
   const latestSource = opts.fetchLatestVersion ?? fetchLatest;
@@ -78,9 +85,13 @@ export async function runUpdate(
     if (ctx.json) {
       r.jsonOut({ ok: false, error: 'could_not_check', current: VERSION });
     } else {
-      r.line('selora — update');
-      r.divider();
-      r.field('Current', VERSION);
+      const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+      r.line(theme.cyan('╭─ Selora Update ──────────────────────────────╮'));
+      r.line(theme.cyan('│') + `  Current:    ${theme.star(VERSION.padEnd(32))}` + theme.cyan('│'));
+      r.line(
+        theme.cyan('│') + `  Status:     ${theme.error('offline'.padEnd(32))}` + theme.cyan('│'),
+      );
+      r.line(theme.cyan('╰──────────────────────────────────────────────╯'));
       r.line('· could not reach the npm registry — check your network and retry');
     }
     process.exitCode = 1;
@@ -99,10 +110,16 @@ export async function runUpdate(
     return;
   }
 
-  r.line('selora — update');
-  r.divider();
-  r.field('Current', VERSION);
-  r.field('Latest', latest);
+  const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+  r.line(theme.cyan('╭─ Selora Update ──────────────────────────────╮'));
+  r.line(theme.cyan('│') + `  Current:    ${theme.star(VERSION.padEnd(32))}` + theme.cyan('│'));
+  r.line(theme.cyan('│') + `  Latest:     ${theme.cyan(latest.padEnd(32))}` + theme.cyan('│'));
+  r.line(
+    theme.cyan('│') +
+      `  Status:     ${(upToDate ? theme.success('✓ up to date') : theme.warning('update available')).padEnd(32)}` +
+      theme.cyan('│'),
+  );
+  r.line(theme.cyan('╰──────────────────────────────────────────────╯'));
 
   if (upToDate) {
     r.line('✓ up to date — nothing to do');
@@ -121,12 +138,15 @@ export async function runUpdate(
     return;
   }
 
-  r.line(`· installing selora@${latest} …`);
+  r.line(`⠋ [1/2] Fetching package selora@${latest} …`);
+  r.line(`· [2/2] installing selora@${latest} …`);
   const result = await installer(latest);
   if (result.code === 0) {
     r.line(`✓ updated to ${latest} — run \`selora --version\` to confirm`);
   } else {
-    r.line(`✗ install failed (exit ${result.code ?? 'none'}) — run \`npm install -g selora@${latest}\` manually`);
+    r.line(
+      `✗ install failed (exit ${result.code ?? 'none'}) — run \`npm install -g selora@${latest}\` manually`,
+    );
     process.exitCode = 1;
   }
 }

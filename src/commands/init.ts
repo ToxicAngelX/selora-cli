@@ -19,6 +19,7 @@ import { SeloraApiError } from '../api/errors.js';
 import { getModel } from '../api/endpoints/models.js';
 import { getStoredKey } from '../auth/storage.js';
 import { Renderer } from '../terminal/render.js';
+import { themeFor } from '../ui/theme.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
 
 export interface InitFlags {
@@ -102,4 +103,21 @@ export async function runInit(ctx: CliContext, flags: InitFlags): Promise<void> 
   r.bullet(
     'the agent enforces context.exclude for read/search tools; an optional "agent" section (maxTurns, allowWindowsCmd) can be hand-edited (see docs/agent.md)',
   );
+
+  const theme = themeFor(loadConfig().theme, ctx.io.isTTY);
+  r.line();
+  r.line(theme.dim('╭─ Project Initialized ────────────────────────╮'));
+  r.line(theme.dim('│') + `  Config:     ${theme.star('selora.json'.padEnd(31))}` + theme.dim('│'));
+  r.line(theme.dim('│') + `  Model:      ${theme.cyan(modelId.padEnd(31))}` + theme.dim('│'));
+  r.line(theme.dim('│') + `  Status:     ${theme.success('✓ ready'.padEnd(31))}` + theme.dim('│'));
+  r.line(theme.dim('│') + ' '.repeat(46) + theme.dim('│'));
+  r.line(theme.dim('│') + `  ${theme.star('Next steps:')}` + ' '.repeat(34) + theme.dim('│'));
+  r.line(
+    theme.dim('│') +
+      `  ❯ ${theme.cyan('selora run')}` +
+      theme.dim(' "<prompt>"'.padEnd(32)) +
+      theme.dim('│'),
+  );
+  r.line(theme.dim('│') + `  ❯ ${theme.cyan('selora chat')}` + ' '.repeat(32) + theme.dim('│'));
+  r.line(theme.dim('╰──────────────────────────────────────────────╯'));
 }

@@ -8,7 +8,11 @@ describe('PromptRouter bracketed paste', () => {
   it('forwards multiline paste as text and submits only on the later Enter', () => {
     const stdin = new PassThrough();
     const wire = new PassThrough();
-    const output = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+    const output = new Writable({
+      write(_chunk, _enc, cb) {
+        cb();
+      },
+    });
     const rl = readline.createInterface({ input: wire, output, terminal: true });
     rl.setPrompt('❯ ');
     const lines: string[] = [];

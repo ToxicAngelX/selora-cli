@@ -115,11 +115,7 @@ import { getStoredKey } from '../auth/storage.js';
 import { PromptClosedError } from '../auth/prompts.js';
 import { Renderer } from '../terminal/render.js';
 import { chatFooterLine, formatChatCost } from './chat-footer.js';
-import {
-  WindowsTracker,
-  windowDetailLines,
-  windowFooterSegment,
-} from './chat-windows.js';
+import { WindowsTracker, windowDetailLines, windowFooterSegment } from './chat-windows.js';
 import { DEFAULT_MODEL_FALLBACK } from './model.js';
 import { formatCount, formatDurationCompact } from '../format.js';
 import { microToWireString, parseMoneyMicro } from '../money.js';
@@ -273,14 +269,19 @@ export async function runChat(
   let surface: TerminalSurface | undefined;
   let input: PromptInput | undefined;
   let view: ConversationView | undefined;
-  const usePromptInput = !ctx.json && ctx.io.isTTY && process.stdout.isTTY === true &&
-    process.stderr.isTTY === true && rawCapable(ctx.io.stdin) && process.env['TERM'] !== 'dumb';
+  const usePromptInput =
+    !ctx.json &&
+    ctx.io.isTTY &&
+    process.stdout.isTTY === true &&
+    process.stderr.isTTY === true &&
+    rawCapable(ctx.io.stdin) &&
+    process.env['TERM'] !== 'dumb';
   const uiIo = {
     ...ctx.io,
-    out: (text: string) => surface ? surface.writeOutput(text) : ctx.io.out(text),
-    err: (text: string) => surface ? surface.writeOutput(text) : ctx.io.err(text),
-    writeOut: (text: string) => surface ? surface.writeOutput(text) : ctx.io.writeOut(text),
-    writeErr: (text: string) => surface ? surface.writeOutput(text) : ctx.io.writeErr(text),
+    out: (text: string) => (surface ? surface.writeOutput(text) : ctx.io.out(text)),
+    err: (text: string) => (surface ? surface.writeOutput(text) : ctx.io.err(text)),
+    writeOut: (text: string) => (surface ? surface.writeOutput(text) : ctx.io.writeOut(text)),
+    writeErr: (text: string) => (surface ? surface.writeOutput(text) : ctx.io.writeErr(text)),
   };
   const r = new Renderer({
     out: uiIo.out,
@@ -663,9 +664,18 @@ export async function runChat(
     let answer = '';
     try {
       if (usePromptInput) {
-        const picked = await pickFromList('Resume the previous conversation?', [
-          { label: 'Resume saved session' }, { label: 'Start fresh' },
-        ], 0, { stdin: ctx.io.stdin, write: ctx.io.writeErr, pauseInput: () => {}, resumeInput: () => {}, theme });
+        const picked = await pickFromList(
+          'Resume the previous conversation?',
+          [{ label: 'Resume saved session' }, { label: 'Start fresh' }],
+          0,
+          {
+            stdin: ctx.io.stdin,
+            write: ctx.io.writeErr,
+            pauseInput: () => {},
+            resumeInput: () => {},
+            theme,
+          },
+        );
         answer = picked === 0 ? 'y' : 'n';
       } else answer = (await nextLine()).trim().toLowerCase();
     } catch {
@@ -728,7 +738,11 @@ export async function runChat(
   // so the prompt keeps per-key editing. (v0.6 left the REPL cooked after
   // the first permission menu; the menu engine needs per-key delivery.)
   const resumeInputRaw = (): void => {
-    if (input) { input.resume(); surface?.resume(); return; }
+    if (input) {
+      input.resume();
+      surface?.resume();
+      return;
+    }
     rl.resume();
     try {
       (ctx.io.stdin as { setRawMode?(m: boolean): void }).setRawMode?.(true);
@@ -760,7 +774,12 @@ export async function runChat(
               askerLineWaits -= 1;
             }
           },
-          pauseInput: () => { if (input) { input.pause(); surface?.suspend(); } else rl.pause(); },
+          pauseInput: () => {
+            if (input) {
+              input.pause();
+              surface?.suspend();
+            } else rl.pause();
+          },
           resumeInput: usePromptInput || menuOn ? resumeInputRaw : () => rl.resume(),
           rawWrite: ctx.io.writeErr,
           style: {
@@ -786,7 +805,10 @@ export async function runChat(
     // the next full prompt draw shows the new mode instead). DECSC/DECRC
     // save/restore, the universally supported pair.
     const w = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
-    if (input) { input.refresh(); return; }
+    if (input) {
+      input.refresh();
+      return;
+    }
     if (rl.line.length + 2 < w) {
       ctx.io.writeErr(`\x1b7\x1b[1A\r\x1b[2K${theme.dim(modeStatusLine(mode))}\x1b8`);
     }
@@ -1073,7 +1095,12 @@ export async function runChat(
                     askerLineWaits -= 1;
                   }
                 },
-                pauseInput: () => { if (input) { input.pause(); surface?.suspend(); } else rl.pause(); },
+                pauseInput: () => {
+                  if (input) {
+                    input.pause();
+                    surface?.suspend();
+                  } else rl.pause();
+                },
                 resumeInput: usePromptInput || menuOn ? resumeInputRaw : () => rl.resume(),
               },
               { mode: 'ask', theme, render: diffRenderOpts() },
@@ -1111,7 +1138,10 @@ export async function runChat(
    * mode status line, and the gradient ❯ marker the user types after.
    */
   function drawPrompt(): void {
-    if (input) { input.prompt(); return; }
+    if (input) {
+      input.prompt();
+      return;
+    }
     const tokens = sessionTokens > 0 ? ` · ${formatCount(BigInt(sessionTokens))} tokens` : '';
     ctx.io.writeErr(theme.dim(`${current.id} · ${shortCwd(cwd)}${tokens}${windowsSuffix()}\n`));
     ctx.io.writeErr(`${theme.dim(modeStatusLine(safeMode ? 'safe' : mode))}\n`);
@@ -1141,7 +1171,10 @@ export async function runChat(
    * lines on every empty line is what made them look duplicated.
    */
   function drawBarePrompt(): void {
-    if (input) { input.prompt(); return; }
+    if (input) {
+      input.prompt();
+      return;
+    }
     ctx.io.writeErr(`${theme.gradient('❯')} `);
   }
 
@@ -1221,7 +1254,12 @@ export async function runChat(
             {
               stdin: ctx.io.stdin,
               write: ctx.io.writeErr,
-              pauseInput: () => { if (input) { input.pause(); surface?.suspend(); } else rl.pause(); },
+              pauseInput: () => {
+                if (input) {
+                  input.pause();
+                  surface?.suspend();
+                } else rl.pause();
+              },
               resumeInput: resumeInputRaw,
               theme,
             },
@@ -1510,11 +1548,18 @@ export async function runChat(
       cols: () => process.stdout.columns || 80,
       rows: () => process.stdout.rows || 24,
     });
-    view = new ConversationView(surface, () => theme, () => termWidth(), {
-      diffPalette: diffConfig.palette,
-    });
+    view = new ConversationView(
+      surface,
+      () => theme,
+      () => termWidth(),
+      {
+        diffPalette: diffConfig.palette,
+      },
+    );
     input = new PromptInput({
-      stdin: ctx.io.stdin, surface, theme: () => theme,
+      stdin: ctx.io.stdin,
+      surface,
+      theme: () => theme,
       cols: () => process.stdout.columns || 80,
       rows: () => process.stdout.rows || 24,
       footer: () => [
@@ -1523,16 +1568,23 @@ export async function runChat(
         'Enter send · Shift+Enter / Ctrl+J newline · Esc stop · Ctrl+D exit',
       ],
       commands: () => slashCommands,
-      history: () => collectPromptHistory(cwd, sentPrompts), cwd,
+      history: () => collectPromptHistory(cwd, sentPrompts),
+      cwd,
       onSubmit: receiveLine,
       onExpand: () => view?.toggleLastChange() ?? false,
       onInterrupt: () => {
         if (currentShellKill) currentShellKill();
         else if (currentAbort) currentAbort.abort();
         else if (input?.line) input.setValue('');
-        else { closeLines(); }
+        else {
+          closeLines();
+        }
       },
-      onExit: () => { currentAbort?.abort(); currentShellKill?.(); closeLines(); },
+      onExit: () => {
+        currentAbort?.abort();
+        currentShellKill?.();
+        closeLines();
+      },
       onMode: () => cycleModeRef.fn?.(),
     });
     input.attach();
@@ -1837,7 +1889,11 @@ export async function runChat(
             if (spinnerAllowed) spinner.start();
           },
           onTurnComplete: (totals) => {
-            if (view) { view.usage(totals); input?.refresh(); return; }
+            if (view) {
+              view.usage(totals);
+              input?.refresh();
+              return;
+            }
             // The stream phase is over — stop the spinner BEFORE the flush and
             // the footer, so neither can land on its row (a turn that ends on
             // reasoning deltas would otherwise glue the footer to it).

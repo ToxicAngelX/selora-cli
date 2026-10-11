@@ -143,35 +143,38 @@ describe('resolveUserPath — inside the project root', () => {
 });
 
 describe('resolveUserPath — outside the project root', () => {
-  itPosix('~, aliases, absolute paths, and .. climbs all resolve to realpathed OUTSIDE paths', () => {
-    // macOS note: realpath — tmpdir may sit behind a symlink (/var → /private/var).
-    const outer = realpathSync(mkdtempSync(join(tmpdir(), 'selora-userpaths-')));
-    try {
-      const root = join(outer, 'proj');
-      mkdirSync(root, { recursive: true });
-      const home = join(outer, 'home');
-      const desktop = join(home, 'Desktop');
-      mkdirSync(desktop, { recursive: true });
-      const exists = (p: string): boolean => p === desktop;
+  itPosix(
+    '~, aliases, absolute paths, and .. climbs all resolve to realpathed OUTSIDE paths',
+    () => {
+      // macOS note: realpath — tmpdir may sit behind a symlink (/var → /private/var).
+      const outer = realpathSync(mkdtempSync(join(tmpdir(), 'selora-userpaths-')));
+      try {
+        const root = join(outer, 'proj');
+        mkdirSync(root, { recursive: true });
+        const home = join(outer, 'home');
+        const desktop = join(home, 'Desktop');
+        mkdirSync(desktop, { recursive: true });
+        const exists = (p: string): boolean => p === desktop;
 
-      const viaAlias = resolveUserPath(root, 'desktop/Projects', { home, exists });
-      expect(viaAlias.ok && viaAlias.inside === false && viaAlias.abs).toBe(
-        join(desktop, 'Projects'),
-      );
-      const viaTilde = resolveUserPath(root, '~/Desktop/notes.txt', { home, exists });
-      expect(viaTilde.ok && viaTilde.inside === false && viaTilde.abs).toBe(
-        join(desktop, 'notes.txt'),
-      );
-      const viaAbs = resolveUserPath(root, join(desktop, 'x.txt'), { home, exists });
-      expect(viaAbs.ok && viaAbs.inside === false && viaAbs.abs).toBe(join(desktop, 'x.txt'));
-      const viaClimb = resolveUserPath(root, '../elsewhere/x.txt', { home, exists });
-      expect(viaClimb.ok && viaClimb.inside === false && viaClimb.abs).toBe(
-        join(outer, 'elsewhere', 'x.txt'),
-      );
-    } finally {
-      rmSync(outer, { recursive: true, force: true });
-    }
-  });
+        const viaAlias = resolveUserPath(root, 'desktop/Projects', { home, exists });
+        expect(viaAlias.ok && viaAlias.inside === false && viaAlias.abs).toBe(
+          join(desktop, 'Projects'),
+        );
+        const viaTilde = resolveUserPath(root, '~/Desktop/notes.txt', { home, exists });
+        expect(viaTilde.ok && viaTilde.inside === false && viaTilde.abs).toBe(
+          join(desktop, 'notes.txt'),
+        );
+        const viaAbs = resolveUserPath(root, join(desktop, 'x.txt'), { home, exists });
+        expect(viaAbs.ok && viaAbs.inside === false && viaAbs.abs).toBe(join(desktop, 'x.txt'));
+        const viaClimb = resolveUserPath(root, '../elsewhere/x.txt', { home, exists });
+        expect(viaClimb.ok && viaClimb.inside === false && viaClimb.abs).toBe(
+          join(outer, 'elsewhere', 'x.txt'),
+        );
+      } finally {
+        rmSync(outer, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('win32: drive paths and the OneDrive alias resolve outside (simulated on POSIX)', () => {
     const root = 'C:\\proj';

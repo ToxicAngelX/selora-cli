@@ -164,7 +164,10 @@ export function startShellCommand(
     // cwd in CI), so taskkill /T /F takes the whole tree down instead.
     if (process.platform === 'win32' && typeof child.pid === 'number') {
       try {
-        spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
+        spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
+          windowsHide: true,
+          stdio: 'ignore',
+        });
         escalate = setTimeout(() => undefined, SHELL_KILL_GRACE_MS);
         escalate.unref?.();
         return;

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PromptBuffer, layoutPromptValue, normalizePromptPaste, wrapPromptValue } from '../src/ui/promptbar.js';
+import {
+  PromptBuffer,
+  layoutPromptValue,
+  normalizePromptPaste,
+  wrapPromptValue,
+} from '../src/ui/promptbar.js';
 
 describe('PromptBuffer', () => {
   it('supports cursor editing and multiline paste without submission', () => {
@@ -60,7 +65,10 @@ describe('PromptBuffer', () => {
     expect(wrapPromptValue('界界a', 4)).toEqual(['界界', 'a']);
     expect(wrapPromptValue('é👨‍👩‍👧‍👦z', 2)).toEqual(['é', '👨‍👩‍👧‍👦', 'z']);
     expect(wrapPromptValue('one\ntwo', 20)).toEqual(['one', 'two']);
-    expect(layoutPromptValue('abcdef', 3, 3)).toEqual({ lines: ['abc', 'def'], cursor: { row: 1, col: 0 } });
+    expect(layoutPromptValue('abcdef', 3, 3)).toEqual({
+      lines: ['abc', 'def'],
+      cursor: { row: 1, col: 0 },
+    });
     expect(layoutPromptValue('a\tb', 4).lines).toEqual(['a   ', 'b']);
   });
 });

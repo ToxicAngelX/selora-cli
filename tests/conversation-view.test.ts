@@ -37,9 +37,14 @@ function harness(color = false) {
   const theme = color
     ? themeFor('galaxy', true, { COLORTERM: 'truecolor' })
     : themeFor('galaxy', false, {});
-  const view = new ConversationView(surface, () => theme, () => size.cols, {
-    diffPalette: 'classic',
-  });
+  const view = new ConversationView(
+    surface,
+    () => theme,
+    () => size.cols,
+    {
+      diffPalette: 'classic',
+    },
+  );
   views.push(view);
   return { writes, size, surface, view, theme, text: () => strip(writes.join('')) };
 }

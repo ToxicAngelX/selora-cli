@@ -229,7 +229,7 @@ queued line too.
 Also at the prompt:
 
 - **Ctrl+R** — expand/collapse the most recent truncated file diff (`… +N
-  lines` in a tool result). When there is no collapsed diff to expand, it
+lines` in a tool result). When there is no collapsed diff to expand, it
   searches past prompts instead (this session + every saved session of the
   project, newest first, deduped). Type to filter, arrows to move, **Enter
   inserts** the pick at the prompt — it is never sent for you. Esc cancels

@@ -67,9 +67,15 @@ export class PromptInput {
 
   constructor(private readonly deps: PromptInputDeps) {}
 
-  get line(): string { return this.buffer.state().value; }
-  get cursor(): number { return this.buffer.state().cursor; }
-  get paused(): boolean { return this.pausedFlag; }
+  get line(): string {
+    return this.buffer.state().value;
+  }
+  get cursor(): number {
+    return this.buffer.state().cursor;
+  }
+  get paused(): boolean {
+    return this.pausedFlag;
+  }
 
   attach(): void {
     if (this.attached) return;
@@ -142,14 +148,24 @@ export class PromptInput {
     // Input keeps at least one row; menus get a bounded viewport around selection.
     const menuBudget = Math.min(10, Math.max(0, maxRows - borderCount - footerCount - 1));
     const renderedMenu = renderMenuRows(this.menu, theme, width);
-    const menuStart = Math.max(0, this.menu.selection + (this.menu.menuKind === 'history' ? 1 : 0) - menuBudget + 1);
+    const menuStart = Math.max(
+      0,
+      this.menu.selection + (this.menu.menuKind === 'history' ? 1 : 0) - menuBudget + 1,
+    );
     const menuRows = menuBudget === 0 ? [] : renderedMenu.slice(menuStart, menuStart + menuBudget);
     // The legacy renderer's slash hint says Tab runs: never display that in this editor.
-    if (this.menu.menuKind === 'slash' && menuRows.length > 0 && menuRows.at(-1)?.includes('Tab/Enter run')) {
+    if (
+      this.menu.menuKind === 'slash' &&
+      menuRows.length > 0 &&
+      menuRows.at(-1)?.includes('Tab/Enter run')
+    ) {
       menuRows[menuRows.length - 1] = theme.dim('  Tab complete · Enter confirm · Esc close');
     }
     const inputBudget = Math.max(1, maxRows - borderCount - footerCount - menuRows.length);
-    const start = Math.max(0, Math.min(layout.cursor.row - inputBudget + 1, layout.lines.length - inputBudget));
+    const start = Math.max(
+      0,
+      Math.min(layout.cursor.row - inputBudget + 1, layout.lines.length - inputBudget),
+    );
     const visible = layout.lines.slice(start, start + inputBudget);
     const lines: string[] = [];
     if (boxed) lines.push(theme.dim(`╭${'─'.repeat(width - 2)}╮`));
@@ -159,7 +175,9 @@ export class PromptInput {
       const marker = logicalRow === 0 ? theme.gradient('❯') : theme.dim('·');
       if (boxed) {
         const rowWidth = layoutPromptValue(line, Number.MAX_SAFE_INTEGER).cursor.col;
-        lines.push(`${theme.dim('│')} ${marker} ${line}${' '.repeat(Math.max(0, contentWidth - rowWidth))}${theme.dim(' │')}`);
+        lines.push(
+          `${theme.dim('│')} ${marker} ${line}${' '.repeat(Math.max(0, contentWidth - rowWidth))}${theme.dim(' │')}`,
+        );
       } else {
         lines.push(`${marker} ${line}`);
       }
@@ -236,7 +254,9 @@ export class PromptInput {
         continue;
       }
       if (this.pending[0] === '\x1b') {
-        const csi = new RegExp(`^${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`).exec(this.pending);
+        const csi = new RegExp(`^${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`).exec(
+          this.pending,
+        );
         const ss3 = new RegExp(`^${String.fromCharCode(27)}O[ -~]`).exec(this.pending);
         const sequence = csi?.[0] ?? ss3?.[0];
         if (sequence !== undefined) {
@@ -245,7 +265,10 @@ export class PromptInput {
           this.escapeSequence(sequence);
           continue;
         }
-        if (this.pending === String.fromCharCode(27) || new RegExp(`^${String.fromCharCode(27)}(?:\\[[0-?]*[ -/]*|O)$`).test(this.pending)) {
+        if (
+          this.pending === String.fromCharCode(27) ||
+          new RegExp(`^${String.fromCharCode(27)}(?:\\[[0-?]*[ -/]*|O)$`).test(this.pending)
+        ) {
           this.armHold();
           return;
         }
@@ -264,22 +287,41 @@ export class PromptInput {
       const precedingCR = this.lastWasCR;
       this.lastWasCR = ch === '\r';
       if (ch === '\r') this.enter();
-      else if (ch === '\n') { if (!precedingCR) this.insertNewline(); }
-      else if (ch === '\x03') { this.closeMenu(true); this.deps.onInterrupt(); }
-      else if (ch === '\x04') { if (this.line === '') this.deps.onExit(); else { this.buffer.deleteForward(); this.edited(); } }
-      else if (ch === '\t') this.complete();
-      else if (ch === '\x12') { if (this.deps.onExpand?.() !== true) this.searchHistory(); }
-      else if (ch === '\x7f' || ch === '\b') { this.buffer.backspace(); this.edited(); }
-      else if (ch === '\x01') this.buffer.moveHome();
+      else if (ch === '\n') {
+        if (!precedingCR) this.insertNewline();
+      } else if (ch === '\x03') {
+        this.closeMenu(true);
+        this.deps.onInterrupt();
+      } else if (ch === '\x04') {
+        if (this.line === '') this.deps.onExit();
+        else {
+          this.buffer.deleteForward();
+          this.edited();
+        }
+      } else if (ch === '\t') this.complete();
+      else if (ch === '\x12') {
+        if (this.deps.onExpand?.() !== true) this.searchHistory();
+      } else if (ch === '\x7f' || ch === '\b') {
+        this.buffer.backspace();
+        this.edited();
+      } else if (ch === '\x01') this.buffer.moveHome();
       else if (ch === '\x05') this.buffer.moveEnd();
       else if (ch === '\x02') this.buffer.moveLeft();
       else if (ch === '\x06') this.buffer.moveRight();
-      else if (ch === '\x17') { this.buffer.deleteWordBackward(); this.edited(); }
-      else if (ch === '\x15') { this.buffer.deleteToHome(); this.edited(); }
-      else if (ch === '\x0b') { this.buffer.deleteToEnd(); this.edited(); }
-      else if (ch >= ' ') {
+      else if (ch === '\x17') {
+        this.buffer.deleteWordBackward();
+        this.edited();
+      } else if (ch === '\x15') {
+        this.buffer.deleteToHome();
+        this.edited();
+      } else if (ch === '\x0b') {
+        this.buffer.deleteToEnd();
+        this.edited();
+      } else if (ch >= ' ') {
         // Keep the ordinary Unicode run together, including surrogate pairs.
-        const match = new RegExp(`^[^${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]+`).exec(ch + this.pending);
+        const match = new RegExp(
+          `^[^${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]+`,
+        ).exec(ch + this.pending);
         const text = match?.[0] ?? ch;
         this.pending = this.pending.slice(text.length - 1);
         this.buffer.insert(text);
@@ -290,19 +332,30 @@ export class PromptInput {
   }
 
   private escapeSequence(seq: string): void {
-    if (new RegExp(`^${String.fromCharCode(27)}\\[(?:13;2(?::[123])?u|13;2~|27;2;13~)$`).test(seq)) this.insertNewline();
+    if (new RegExp(`^${String.fromCharCode(27)}\\[(?:13;2(?::[123])?u|13;2~|27;2;13~)$`).test(seq))
+      this.insertNewline();
     else if (seq === '\x1b[A' || seq === '\x1bOA') this.navigate(-1);
     else if (seq === '\x1b[B' || seq === '\x1bOB') this.navigate(1);
     else if (seq === '\x1b[D' || seq === '\x1bOD') this.buffer.moveLeft();
     else if (seq === '\x1b[C' || seq === '\x1bOC') this.buffer.moveRight();
-    else if (new RegExp(`^${String.fromCharCode(27)}\\[1;[35]D$`).test(seq)) this.buffer.moveWordLeft();
-    else if (new RegExp(`^${String.fromCharCode(27)}\\[1;[35]C$`).test(seq)) this.buffer.moveWordRight();
+    else if (new RegExp(`^${String.fromCharCode(27)}\\[1;[35]D$`).test(seq))
+      this.buffer.moveWordLeft();
+    else if (new RegExp(`^${String.fromCharCode(27)}\\[1;[35]C$`).test(seq))
+      this.buffer.moveWordRight();
     else if (['\x1b[H', '\x1bOH', '\x1b[1~', '\x1b[7~'].includes(seq)) this.buffer.moveHome();
     else if (['\x1b[F', '\x1bOF', '\x1b[4~', '\x1b[8~'].includes(seq)) this.buffer.moveEnd();
-    else if (seq === '\x1b[3~') { this.buffer.deleteForward(); this.edited(); }
-    else if (seq === '\x1b[3;5~') { this.buffer.deleteWordForward(); this.edited(); }
-    else if (seq === '\x1b[Z') { if (this.menu.isOpen) { this.menu.move(-1); this.explicitSelection = true; } else this.deps.onMode(); }
-    else if (seq === '\x1b[13u') this.enter();
+    else if (seq === '\x1b[3~') {
+      this.buffer.deleteForward();
+      this.edited();
+    } else if (seq === '\x1b[3;5~') {
+      this.buffer.deleteWordForward();
+      this.edited();
+    } else if (seq === '\x1b[Z') {
+      if (this.menu.isOpen) {
+        this.menu.move(-1);
+        this.explicitSelection = true;
+      } else this.deps.onMode();
+    } else if (seq === '\x1b[13u') this.enter();
     // Unknown terminal reports are consumed, never inserted into the draft.
     this.updateMenu();
   }
@@ -385,7 +438,8 @@ export class PromptInput {
     }
     this.historyIndex = Math.max(-1, Math.min(history.length - 1, this.historyIndex - delta));
     if (this.historyIndex === -1) {
-      if (this.historyDraft !== undefined) this.buffer.setValue(this.historyDraft.value, this.historyDraft.cursor);
+      if (this.historyDraft !== undefined)
+        this.buffer.setValue(this.historyDraft.value, this.historyDraft.cursor);
       this.historyDraft = undefined;
     } else {
       const text = history[this.historyIndex]!;
@@ -442,19 +496,30 @@ export class PromptInput {
       this.closeMenu(false);
       return;
     }
-    const listing = trigger.kind === 'slash'
-      ? (() => { const items = filterSlashCommands(this.deps.commands(), trigger.filter).map(slashCommandItem); return { items, total: items.length }; })()
-      : listPathMenu(this.deps.cwd, trigger.filter);
+    const listing =
+      trigger.kind === 'slash'
+        ? (() => {
+            const items = filterSlashCommands(this.deps.commands(), trigger.filter).map(
+              slashCommandItem,
+            );
+            return { items, total: items.length };
+          })()
+        : listPathMenu(this.deps.cwd, trigger.filter);
     if (listing.items.length === 0) {
       this.closeMenu(false);
       return;
     }
     const only = listing.items.length === 1 ? listing.items[0] : undefined;
-    if (trigger.kind === 'path' && only?.kind !== 'dir' && only?.insert === this.line.slice(trigger.tokenStart)) {
+    if (
+      trigger.kind === 'path' &&
+      only?.kind !== 'dir' &&
+      only?.insert === this.line.slice(trigger.tokenStart)
+    ) {
       this.closeMenu(false);
       return;
     }
-    if (this.menu.isOpen && this.menu.menuKind === trigger.kind) this.menu.update(listing.items, listing.total, trigger.tokenStart);
+    if (this.menu.isOpen && this.menu.menuKind === trigger.kind)
+      this.menu.update(listing.items, listing.total, trigger.tokenStart);
     else {
       this.menu.open(trigger.kind, listing.items, listing.total, trigger.tokenStart);
       this.explicitSelection = false;

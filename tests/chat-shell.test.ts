@@ -151,9 +151,7 @@ describe('startShellCommand (injected spawn)', () => {
 
   it('real spawn smoke: echo runs in the given cwd with shell semantics', async () => {
     const cmd =
-      process.platform === 'win32'
-        ? 'echo hello-shell'
-        : 'echo hello-$([ 1 -eq 1 ] && echo shell)'; // $() proves a real shell
+      process.platform === 'win32' ? 'echo hello-shell' : 'echo hello-$([ 1 -eq 1 ] && echo shell)'; // $() proves a real shell
     const handle = startShellCommand(cmd, tmpdir()); // cross-platform temp dir
     const result = await handle.done;
     expect(result.code).toBe(0);
@@ -353,10 +351,7 @@ describe('the REPL `!` escape', () => {
   it('long output folds at the last 40 lines with the "… N more lines" marker', async () => {
     saveConfig({ apiKey: FAKE_KEY_USER });
     installRoutes();
-    const { io, cap } = replIo([
-      `! node -e "for(let i=1;i<=52;i++)console.log('row'+i)"`,
-      '/exit',
-    ]);
+    const { io, cap } = replIo([`! node -e "for(let i=1;i<=52;i++)console.log('row'+i)"`, '/exit']);
     await runChat(replCtx(io), { cwd: chatCwd() });
     const err = cap.err();
     expect(err).toContain('… 12 more lines');

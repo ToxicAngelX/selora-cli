@@ -137,7 +137,9 @@ export function loadProjectConfig(cwd: string): ProjectConfig {
       if (typeof v === 'number' && Number.isInteger(v) && v >= 1000 && v <= 1_000_000) {
         agent.contextTokens = v;
       } else {
-        console.error('· Ignoring agent.contextTokens — must be an integer between 1000 and 1000000.');
+        console.error(
+          '· Ignoring agent.contextTokens — must be an integer between 1000 and 1000000.',
+        );
       }
     }
     if (Object.hasOwn(a, 'compactModel')) {

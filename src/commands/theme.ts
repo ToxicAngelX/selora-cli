@@ -8,11 +8,33 @@
 
 import type { CliContext } from '../context.js';
 import { loadConfig, saveConfig } from '../config/index.js';
-import { isThemeName, paletteFor, THEME_NAMES, type ThemeName } from '../ui/theme.js';
+import {
+  isThemeName,
+  paletteFor,
+  Theme,
+  themeFor,
+  THEME_NAMES,
+  type ThemeName,
+} from '../ui/theme.js';
 import { Renderer } from '../terminal/render.js';
 
 export interface ThemeFlags {
   name?: string | undefined;
+}
+
+function swatchFor(themeName: ThemeName, t: Theme): string {
+  const p = paletteFor(themeName);
+  if (themeName === 'mono') {
+    return `${t.dim('●')} (monochrome)`;
+  }
+  const dots = p.gradient.map((hex) => t.wrap(hex, '●')).join(' ');
+  const labels =
+    themeName === 'galaxy'
+      ? 'cyan, indigo, violet, magenta'
+      : themeName === 'nebula'
+        ? 'magenta, pink, orange, amber'
+        : 'emerald, teal, cyan, sky';
+  return `${dots} (${labels})`;
 }
 
 export async function runTheme(ctx: CliContext, flags: ThemeFlags): Promise<void> {
@@ -28,13 +50,21 @@ export async function runTheme(ctx: CliContext, flags: ThemeFlags): Promise<void
   const name = flags.name !== undefined ? flags.name.trim() : '';
 
   if (name === '') {
-    const current = loadConfig().theme ?? 'galaxy';
+    const current = (loadConfig().theme ?? 'galaxy') as ThemeName;
     if (ctx.json) {
       r.jsonOut({ ok: true, theme: current, available: THEME_NAMES });
       return;
     }
-    r.field('Theme', current);
-    r.gray(`Available: ${THEME_NAMES.join(', ')}`);
+    const theme = themeFor(current, ctx.io.isTTY);
+    r.field('Theme', `${current}  ✦ ${swatchFor(current, theme)}`);
+    r.line();
+    r.gray(`Available themes: ${THEME_NAMES.join(', ')}`);
+    for (const tn of THEME_NAMES) {
+      const isCurrent = tn === current;
+      const marker = isCurrent ? theme.cyan('✓') : ' ';
+      r.line(`  ${marker} ✦ ${tn.padEnd(8)} ${swatchFor(tn, theme)}`);
+    }
+    r.line();
     r.gray('Set one with: selora theme <name>');
     return;
   }
