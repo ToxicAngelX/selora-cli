@@ -24,6 +24,7 @@ import {
   listSessions,
   loadSession,
   newSession,
+  renameSession,
   saveSession,
   sessionNameOk,
   sessionPath,
@@ -115,6 +116,31 @@ describe('session store', () => {
       saveSession(root, newSession('two', 'm2'));
       const files = readdirSync(sessionsDir(root));
       expect(files.sort()).toEqual(['one.json', 'two.json']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rename: happy path moves file + stored name; every refusal keeps both sides intact', () => {
+    const root = tempProject();
+    try {
+      const s = newSession('from', 'm1');
+      s.messages = [{ role: 'user', content: 'keep me' }];
+      saveSession(root, s);
+
+      const ok = renameSession(root, 'from', 'to');
+      expect(ok).toEqual({ ok: true, path: sessionPath(root, 'to') });
+      expect(existsSync(sessionPath(root, 'from'))).toBe(false);
+      expect(loadSession(root, 'to')!.messages).toHaveLength(1);
+
+      saveSession(root, newSession('occupied', 'm2'));
+      expect(renameSession(root, 'to', 'occupied')).toEqual({ ok: false, error: 'target-exists' });
+      expect(renameSession(root, 'ghost', 'x1')).toEqual({ ok: false, error: 'not-found' });
+      expect(renameSession(root, 'to', 'to')).toEqual({ ok: false, error: 'same-name' });
+      expect(renameSession(root, 'to', '../escape')).toEqual({ ok: false, error: 'invalid-name' });
+      // nothing was lost or mangled
+      expect(loadSession(root, 'to')).not.toBeNull();
+      expect(loadSession(root, 'occupied')!.model).toBe('m2');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -427,6 +453,90 @@ describe('selora sessions', () => {
       const badAction = capturedIo();
       await runSessions(ctx(badAction.io), 'explode', undefined, { cwd: root });
       expect(badAction.cap.err.join('\n')).toContain('unknown action "explode"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rename: moves the file + stored name, keeps the history; never overwrites', async () => {
+    const root = tempProject();
+    try {
+      const s = newSession('old-name', 'glm-5.3-flash');
+      s.messages = [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: 'a' },
+      ];
+      saveSession(root, s);
+
+      const { io, cap } = capturedIo();
+      await runSessions(ctx(io), 'rename', 'old-name', { cwd: root }, 'new-name');
+      expect(cap.out.join('\n')).toContain('Renamed session old-name → new-name');
+      expect(existsSync(sessionPath(root, 'old-name'))).toBe(false);
+      const renamed = loadSession(root, 'new-name');
+      expect(renamed).not.toBeNull();
+      expect(renamed!.name).toBe('new-name');
+      expect(renamed!.messages).toHaveLength(2);
+
+      // over an existing name: refused, both intact
+      saveSession(root, newSession('taken', 'm2'));
+      const { io: io2, cap: cap2 } = capturedIo();
+      await runSessions(ctx(io2), 'rename', 'new-name', { cwd: root }, 'taken');
+      expect(cap2.err.join('\n')).toContain('already exists');
+      expect(process.exitCode).toBe(1);
+      expect(loadSession(root, 'new-name')).not.toBeNull();
+      expect(loadSession(root, 'taken')!.model).toBe('m2');
+
+      // missing source / bad names / same name
+      const { io: io3, cap: cap3 } = capturedIo();
+      await runSessions(ctx(io3), 'rename', 'ghost', { cwd: root }, 'x1');
+      expect(cap3.err.join('\n')).toContain('no session named "ghost"');
+      const { io: io4, cap: cap4 } = capturedIo();
+      await runSessions(ctx(io4), 'rename', 'new-name', { cwd: root }, 'bad name!');
+      expect(cap4.err.join('\n')).toContain('letters, digits, dash');
+      const { io: io5, cap: cap5 } = capturedIo();
+      await runSessions(ctx(io5), 'rename', 'new-name', { cwd: root }, 'new-name');
+      expect(cap5.err.join('\n')).toContain('same as the old one');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rename --json: the machine shape; a stray third arg on other actions is rejected', async () => {
+    const root = tempProject();
+    try {
+      saveSession(root, newSession('before', 'm'));
+      const { io, cap } = capturedIo();
+      await runSessions(ctx(io, true), 'rename', 'before', { cwd: root }, 'after');
+      const parsed = JSON.parse(cap.out.join('')) as {
+        ok: boolean;
+        renamed: boolean;
+        from: string;
+        to: string;
+      };
+      expect(parsed).toEqual({ ok: true, renamed: true, from: 'before', to: 'after' });
+
+      const { io: io2, cap: cap2 } = capturedIo();
+      await runSessions(ctx(io2), 'rm', 'after', { cwd: root, yes: true }, 'stray');
+      expect(cap2.err.join('\n')).toContain('unexpected extra argument');
+      expect(process.exitCode).toBe(1);
+      expect(existsSync(sessionPath(root, 'after'))).toBe(true); // untouched
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('list: shows a relative "ago" stamp, not the raw ISO timestamp', async () => {
+    const root = tempProject();
+    try {
+      const s = newSession('recent', 'glm-5.3-flash');
+      s.messages = [{ role: 'user', content: 'hi' }];
+      saveSession(root, s); // updatedAt = now
+      const { io, cap } = capturedIo();
+      await runSessions(ctx(io), 'list', undefined, { cwd: root });
+      const out = cap.out.join('\n');
+      expect(out).toContain('updated just now');
+      // no raw ISO timestamp in the display (the machine shape keeps it)
+      expect(out).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

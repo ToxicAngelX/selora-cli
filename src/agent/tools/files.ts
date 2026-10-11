@@ -25,13 +25,25 @@
  *  - write_file dry runs (and real runs) now carry the diff too: creates
  *    diff against '' and overwrites against the old content (read back only
  *    when the existing file is within the tool size cap).
+ *
+ * v2.1.1 (write safety on EVERY path — previously only the interactive
+ * review gate had this):
+ *  - Real runs write through diff/safety's atomicWriteFile (tmp + fsync +
+ *    rename in the same directory, existing permission bits preserved) — a
+ *    crash mid-write can never leave a truncated target.
+ *  - When the loop threads ctx.expectedBefore (the content the approved dry
+ *    run previewed), the real run re-checks the bytes on disk and refuses
+ *    honestly when they differ — the user approved a specific change, and
+ *    applying it to a file that changed since the preview would be a silent
+ *    clobber (an editor save while the prompt was open is the classic case).
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Tool, ToolResult } from '../tool.js';
 import { effectiveExcludeGlobs, isExcludedRel, MAX_TOOL_FILE_BYTES, statPath } from '../paths.js';
 import { isInsideAny, resolveUserPath } from '../userPaths.js';
+import { atomicWriteFile } from '../../diff/safety.js';
 
 const READ_DEFAULT_LINES = 200;
 const READ_MAX_LINES = 10_000;
@@ -258,6 +270,20 @@ export const writeFileTool: Tool = {
         before = undefined; // unreadable — the write itself will surface the error
       }
     }
+    // Stale-edit detection (v2.1.1): when the loop threads the content the
+    // approved dry run previewed, the bytes on disk must still match it.
+    // 'create' baselines as '' — a file that APPEARED since the preview only
+    // conflicts when it is non-empty (overwriting an empty file is harmless).
+    // An existing file that can no longer be read within the cap (before
+    // undefined) is itself a change from a readable baseline: fail closed.
+    if (ctx.expectedBefore !== undefined) {
+      const current = existed ? before : '';
+      if (current === undefined || current !== ctx.expectedBefore) {
+        return badShape(
+          `write_file: ${p.display} changed on disk since the preview was approved — re-read the file and retry the write`,
+        );
+      }
+    }
     const diff =
       before !== undefined || !existed
         ? {
@@ -277,10 +303,15 @@ export const writeFileTool: Tool = {
     }
     try {
       mkdirSync(dirname(p.abs), { recursive: true });
-      writeFileSync(p.abs, content, 'utf8');
     } catch (err) {
-      return badShape(`write_file: cannot write ${p.display}: ${errText(err)}`);
+      return badShape(
+        `write_file: cannot create the parent directories of ${p.display}: ${errText(err)}`,
+      );
     }
+    // Atomic (v2.1.1): tmp + fsync + rename in the same directory; an existing
+    // target keeps its permission bits (atomicWriteFile's default).
+    const w = atomicWriteFile(p.abs, content);
+    if (!w.ok) return badShape(`write_file: cannot write ${p.display}: ${w.error.message}`);
     return {
       ok: true,
       summary: `${existed ? 'overwrote' : 'wrote'} ${p.display} (${formatBytes(content.length)})`,
@@ -366,6 +397,14 @@ export const editFileTool: Tool = {
     } catch (err) {
       return badShape(`edit_file: cannot read ${p.display}: ${errText(err)}`);
     }
+    // Stale-edit detection (v2.1.1): the approved preview was computed from
+    // the dry run's read; if the bytes changed since, the edit the user
+    // approved no longer applies to what's on disk — refuse honestly.
+    if (ctx.expectedBefore !== undefined && text !== ctx.expectedBefore) {
+      return badShape(
+        `edit_file: ${p.display} changed on disk since the preview was approved — re-read the file and retry the edit`,
+      );
+    }
     // Occurrence contract (v1.3): exactly-once, or every-occurrence with
     // replace_all. Refusals are precise — a not-found shows the closest line,
     // an ambiguous match lists the occurrence line numbers.
@@ -398,7 +437,8 @@ export const editFileTool: Tool = {
       };
     }
     try {
-      writeFileSync(p.abs, next, 'utf8');
+      const w = atomicWriteFile(p.abs, next);
+      if (!w.ok) return badShape(`edit_file: cannot write ${p.display}: ${w.error.message}`);
     } catch (err) {
       return badShape(`edit_file: cannot write ${p.display}: ${errText(err)}`);
     }

@@ -631,7 +631,45 @@ async function executeToolCall(
   // Session auto-allow from an earlier 'a' answer (memory-only). Tools that
   // must always ask (remove) are exempt even in always-allow mode.
   if (tool.neverAutoAllow !== true && allows.check(tool.kind, tool.name, label)) {
-    return await runApproved(tool, input, label, reply, toolEvents, cb, opts, allows.outsideDirs());
+    if (tool.kind === 'read') {
+      // Reads carry no diff and cannot clobber anything — straight to the run.
+      return await runApproved(tool, input, label, reply, toolEvents, cb, opts, allows.outsideDirs());
+    }
+    // Write/exec: probe first (a fresh dry run, exactly like the --yes path).
+    // The probe supplies the display's diff payload, detects outside-root
+    // targets, and its `before` is compared against the baseline recorded
+    // when the user approved 'always': the file changing since (an editor
+    // save between turns, a watcher) means the blanket approval no longer
+    // matches reality — fall through to the normal gate and ask again with
+    // the FRESH diff instead of silently clobbering the external change.
+    const probe = await previewTool(input, allows.outsideDirs());
+    if (probe.outside !== undefined) allows.rememberDir(grantDirFor(probe.outside.abs));
+    const baseline = allows.baselineFor(tool.kind, tool.name, label);
+    // baseline undefined → nothing verifiable was ever approved (e.g. a
+    // >256 KB target carries no diff): proceed as before. Otherwise the
+    // probe's `before` must match the baseline exactly — a probe that CANNOT
+    // verify (no diff now, though one was approved) is treated as changed.
+    if (baseline === undefined || (probe.diff !== undefined && probe.diff.before === baseline)) {
+      const outcome = await runApproved(
+        tool,
+        input,
+        label,
+        reply,
+        toolEvents,
+        cb,
+        opts,
+        allows.outsideDirs(),
+        probe.diff,
+      );
+      // Refresh the baseline: the agent's own write is the new known state.
+      if (outcome === 'succeeded' && probe.diff !== undefined) {
+        allows.rememberBaseline(tool.kind, tool.name, label, probe.diff.after);
+      }
+      return outcome;
+    }
+    cb.onActivity?.(
+      `· ${label}: the file changed on disk since it was allowed for this session — asking again`,
+    );
   }
 
   if (opts.autoApprove) {
@@ -709,6 +747,9 @@ async function executeToolCall(
     if (answer.decision === 'allow-session' && tool.kind !== 'read') {
       // One prompt per unique outside write: remember the exact label too.
       allows.remember(tool.kind, tool.name, label);
+      if (dry.diff !== undefined) {
+        allows.rememberBaseline(tool.kind, tool.name, label, dry.diff.after);
+      }
     }
     return await runApproved(tool, input, label, reply, toolEvents, cb, opts, dirs, dry.diff);
   }
@@ -741,8 +782,10 @@ async function executeToolCall(
         return await applyReviewed(hooks, tool, label, change, undefined);
       case 'apply-all':
         // The hook auto-answers subsequent reviews itself; also record the
-        // classic session allow for this exact label.
+        // classic session allow for this exact label — with the baseline, so
+        // an external edit between turns re-prompts instead of clobbering.
         allows.remember(tool.kind, tool.name, label);
+        allows.rememberBaseline(tool.kind, tool.name, label, change.after);
         cb.onActivity?.('· applying all remaining file changes without asking');
         return await applyReviewed(hooks, tool, label, change, undefined);
       case 'apply-hunks':
@@ -833,6 +876,12 @@ async function executeToolCall(
       if (answer.decision === 'allow' || answer.decision === 'allow-session') {
         if (answer.decision === 'allow-session' && tool.neverAutoAllow !== true) {
           allows.remember(tool.kind, tool.name, label);
+          // The content this approved change leaves on disk — the baseline a
+          // later same-label call is checked against before it may skip the
+          // prompt (an external edit since then re-asks instead of clobbering).
+          if (dryDiff !== undefined && dryDiff !== null) {
+            allows.rememberBaseline(tool.kind, tool.name, label, dryDiff.after);
+          }
           cb.onActivity?.('· allowed for this session');
         }
         return await runApproved(
@@ -945,6 +994,11 @@ async function runApproved(
     dryRun: false,
     outsideDirs,
     signal: opts.signal,
+    // Stale-edit baseline (v2.1.1): the approved dry run's `before` — write
+    // tools refuse the real write when the bytes on disk moved since the
+    // preview. Undefined when no dry run carried a diff (a >256 KB target);
+    // the write then proceeds without the check, as before.
+    expectedBefore: dryDiff?.before,
   });
   // The real run's own payload wins; the dry run's is the display fallback.
   const payload = result.diff ?? dryDiff;

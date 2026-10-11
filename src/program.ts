@@ -234,19 +234,20 @@ export function buildProgram(io: CliIo): Command {
     });
 
   const sessionsCmd = program
-    .command('sessions [action] [name]')
+    .command('sessions [action] [name] [newName]')
     .helpGroup('⚡ Core & Agent:')
-    .description('manage agent conversation sessions (list, show, rm; default: list)')
+    .description('manage agent conversation sessions (list, show, rm, rename; default: list)')
     .option('--debug', 'show request/response details (always redacted)')
     .option('--json', 'print machine-readable JSON only')
     .option('--api-url <url>', 'Selora gateway base URL for this invocation')
     .option('--yes', 'confirm rm non-interactively')
-    .action(async (action: unknown, name: unknown, opts: Record<string, unknown>) => {
+    .action(async (action: unknown, name: unknown, newName: unknown, opts: Record<string, unknown>) => {
       await runSessions(
         ctxFor(sessionsCmd),
         typeof action === 'string' ? action : undefined,
         typeof name === 'string' ? name : undefined,
         { yes: opts['yes'] === true },
+        typeof newName === 'string' ? newName : undefined,
       );
     });
 

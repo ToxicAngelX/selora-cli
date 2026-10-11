@@ -35,6 +35,17 @@ export interface ToolContext {
   outsideDirs?: readonly string[];
   /** Abort signal for the current agent turn/tool sequence. */
   signal?: AbortSignal | undefined;
+  /**
+   * v2.1.1 stale-edit detection (write tools, real runs only): the exact
+   * file content the approved dry run computed its preview/diff from ('' for
+   * a create). When set, the real run must RE-READ the target and refuse
+   * with an honest "changed on disk since the preview" failure when the
+   * bytes differ — the user approved a specific change, and applying it to
+   * anything else would be a silent clobber. Undefined = no baseline (the
+   * dry run could not read the target); the tool then writes without the
+   * check, exactly as before.
+   */
+  expectedBefore?: string | undefined;
 }
 
 /** Throw the loop's canonical cancellation error when work should stop. */

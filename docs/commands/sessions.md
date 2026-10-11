@@ -1,4 +1,4 @@
-# `selora sessions [list|show|rm] [name]`
+# `selora sessions [list|show|rm|rename] [name] [new-name]`
 
 Manage the agent's project-local conversation sessions — the
 `.selora/sessions/<name>.json` files written by `selora chat` (the
@@ -13,9 +13,12 @@ chat REPL with the full history restored (see [resume.md](resume.md)).
 ```
 $ selora sessions
 Sessions in /home/you/proj/.selora/sessions (newest first):
-work         glm-5.3-flash · 6 messages · updated 2026-10-05T17:43:12.314Z
-scratch      glm-5.3 · 2 messages · updated 2026-10-05T09:02:44.001Z
+work         glm-5.3-flash · 6 messages · updated 5h ago
+scratch      glm-5.3 · 2 messages · updated 2d ago
 ```
+
+The update stamp is relative (`just now`, `3m ago`, `5h ago`, `2d ago`;
+past 30 days the absolute date). `--json` keeps the raw ISO `updatedAt`.
 
 An empty project prints the honest start hint:
 `· no sessions in this project — start one: selora run --session <name> "<prompt>"`.
@@ -44,6 +47,15 @@ Deletes the session file. Interactively it asks `Delete session "<name>"?`
 `✗ confirmation required — pass --yes`. `--yes` confirms non-interactively
 (and is required for `--json`).
 
+## rename `<name>` `<new-name>`
+
+Moves the session to a fresh name — the file AND the stored name field, so
+`selora resume <new-name>` finds it. The new file is written (atomically)
+before the old one is removed, so a failure never loses the conversation.
+Renaming onto an existing session name is refused (`target exists`), as are
+names outside the session slug set (letters, digits, dash, underscore, dot;
+alphanumeric first; 1–64 chars).
+
 ## `--json`
 
 `list` prints `{ok, sessions:[{name, model, updatedAt, messages, resumable}]}`
@@ -51,5 +63,5 @@ Deletes the session file. Interactively it asks `Delete session "<name>"?`
 `show` prints the **full** stored session (`{ok, version, name, model,
 createdAt, updatedAt, messages}`) — untruncated, like chat/run content: it
 is data the user's own key fetched. `rm` prints `{ok, deleted: true, name}`
-and requires `--yes`. Errors use the shared `{ok:false, error:{…}}`
-envelope.
+and requires `--yes`. `rename` prints `{ok, renamed: true, from, to}`.
+Errors use the shared `{ok:false, error:{…}}` envelope.

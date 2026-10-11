@@ -1,7 +1,7 @@
 /**
- * `selora sessions [list|show|rm] [name]` — manage the agent's project-local
- * conversation sessions (.selora/sessions/<name>.json, written by
- * `selora run --session <name>`).
+ * `selora sessions [list|show|rm|rename] [name] [new-name]` — manage the
+ * agent's project-local conversation sessions (.selora/sessions/<name>.json,
+ * written by `selora run --session <name>`).
  *
  *  - list (default): name, model, message count, last update — newest first
  *  - show <name>: render the stored conversation. Each message is truncated
@@ -10,6 +10,9 @@
  *    agent may have read into the conversation never prints
  *  - rm <name>: delete, with a y/N confirm interactively; --yes is required
  *    when stdin is not a TTY
+ *  - rename <name> <new-name>: move the session (file + stored name field)
+ *    to a fresh name — never overwrites an existing session; the old file is
+ *    removed only after the new one is safely written
  *
  * --json prints machine shapes; show's JSON carries the FULL messages (like
  * chat/run content, unredacted — it is data the user's own key fetched).
@@ -19,10 +22,12 @@ import type { CliContext } from '../context.js';
 import { Renderer } from '../terminal/render.js';
 import { redact } from '../api/redact.js';
 import { createPrompter } from '../auth/prompts.js';
+import { formatRelativeTime } from '../format.js';
 import {
   deleteSession,
   listSessions,
   loadSession,
+  renameSession,
   sessionNameOk,
   sessionsDir,
 } from '../agent/session/store.js';
@@ -42,6 +47,7 @@ export async function runSessions(
   action: string | undefined,
   name: string | undefined,
   flags: SessionsFlags,
+  newName?: string | undefined,
 ): Promise<void> {
   const r = new Renderer({
     out: ctx.io.out,
@@ -53,6 +59,51 @@ export async function runSessions(
   });
   const cwd = flags.cwd ?? process.cwd();
   const what = action ?? 'list';
+
+  // A third positional belongs to rename only — never silently ignored.
+  if (newName !== undefined && what !== 'rename') {
+    process.exitCode = 1;
+    const message = `unexpected extra argument "${newName}" — usage: selora sessions ${what}${what === 'list' ? '' : ' <name>'}`;
+    if (ctx.json) r.jsonOut({ ok: false, error: { kind: 'internal', message } });
+    else r.fail(message);
+    return;
+  }
+
+  if (what === 'rename') {
+    const fail = (message: string): void => {
+      process.exitCode = 1;
+      if (ctx.json) r.jsonOut({ ok: false, error: { kind: 'internal', message } });
+      else r.fail(message);
+    };
+    if (name === undefined || name.trim() === '' || !sessionNameOk(name)) {
+      fail('Usage: selora sessions rename <name> <new-name>');
+      return;
+    }
+    if (newName === undefined || newName.trim() === '' || !sessionNameOk(newName)) {
+      fail(
+        'the new name must be 1-64 chars: letters, digits, dash, underscore, dot (alphanumeric first)',
+      );
+      return;
+    }
+    const res = renameSession(cwd, name, newName);
+    if (!res.ok) {
+      const messages: Record<typeof res.error, string> = {
+        'not-found': `no session named "${name}" in this project`,
+        'target-exists': `a session named "${newName}" already exists — pick another name`,
+        'same-name': 'the new name is the same as the old one',
+        'invalid-name':
+          'the new name must be 1-64 chars: letters, digits, dash, underscore, dot (alphanumeric first)',
+      };
+      fail(messages[res.error]);
+      return;
+    }
+    if (ctx.json) {
+      r.jsonOut({ ok: true, renamed: true, from: name, to: newName });
+      return;
+    }
+    r.ok(`Renamed session ${name} → ${newName}`);
+    return;
+  }
 
   if (what === 'list') {
     const sessions = listSessions(cwd);
@@ -80,7 +131,7 @@ export async function runSessions(
     for (const s of sessions) {
       const nameStyled = theme.cyan(s.name);
       const countBadge = theme.dim(`[${s.messageCount} msg${s.messageCount === 1 ? '' : 's'}]`);
-      const details = `${s.model} · ${s.messageCount} messages · updated ${s.updatedAt}`;
+      const details = `${s.model} · ${s.messageCount} messages · updated ${formatRelativeTime(s.updatedAt)}`;
       r.line(`  ✦ ${nameStyled} ${countBadge} — ${details}`);
     }
     r.line();
@@ -164,7 +215,7 @@ export async function runSessions(
   }
 
   process.exitCode = 1;
-  const message = `unknown action "${what}" — use: list, show, or rm`;
+  const message = `unknown action "${what}" — use: list, show, rm, or rename`;
   if (ctx.json) r.jsonOut({ ok: false, error: { kind: 'internal', message } });
   else r.fail(message);
 }

@@ -436,10 +436,20 @@ export function createDenyingAsker(): PermissionAsker {
  * silently approves a different one. v0.3 also remembers OUTSIDE-ROOT
  * directory grants — an approved outside answer grants exactly that directory
  * (since v0.8: any approval, not just 'a').
+ *
+ * v2.1.1 content baselines: an 'always'-approved WRITE label also records
+ * the content the file held AFTER the approved change landed (the approved
+ * dry run's `after`). A later same-label call probes the disk first; when
+ * the bytes no longer match the baseline — the user edited the file in their
+ * editor between turns, a watcher rewrote it — the allow no longer matches
+ * reality and the loop asks again instead of silently clobbering the
+ * external change. Baselines refresh after every successful allowed write.
  */
 export class SessionAllows {
   private readonly allowed = new Set<string>();
   private readonly dirs = new Set<string>();
+  /** key (same as the allow entry) → file content after the last approved write. */
+  private readonly baselines = new Map<string, string>();
 
   static key(kind: ToolKind, toolName: string, label: string): string {
     return kind === 'read' ? `read:${toolName}` : `${toolName}:${label}`;
@@ -451,6 +461,16 @@ export class SessionAllows {
 
   remember(kind: ToolKind, toolName: string, label: string): void {
     this.allowed.add(SessionAllows.key(kind, toolName, label));
+  }
+
+  /** The stored post-write baseline for an allowed label (undefined = none). */
+  baselineFor(kind: ToolKind, toolName: string, label: string): string | undefined {
+    return this.baselines.get(SessionAllows.key(kind, toolName, label));
+  }
+
+  /** Record the content the approved change leaves on disk (its `after`). */
+  rememberBaseline(kind: ToolKind, toolName: string, label: string, after: string): void {
+    this.baselines.set(SessionAllows.key(kind, toolName, label), after);
   }
 
   /** The session-granted outside directories (a copy — tools snapshot it). */

@@ -10,6 +10,7 @@ import {
   formatDurationCompact,
   formatTokensCompact,
   daysLeft,
+  formatRelativeTime,
 } from '../src/format.js';
 import { sumUsageRows } from '../src/commands/usage.js';
 import type { UsageDay } from '../src/api/endpoints/me.js';
@@ -89,6 +90,27 @@ describe('daysLeft', () => {
   it('absent or unparseable → null (never invented)', () => {
     expect(daysLeft('', NOW)).toBeNull();
     expect(daysLeft('not-a-date', NOW)).toBeNull();
+  });
+});
+
+describe('formatRelativeTime', () => {
+  const NOW = Date.parse('2026-10-11T12:00:00Z');
+  it('under 45s → "just now"', () => {
+    expect(formatRelativeTime('2026-10-11T11:59:30Z', NOW)).toBe('just now');
+    expect(formatRelativeTime('2026-10-11T12:00:00Z', NOW)).toBe('just now');
+  });
+  it('minutes / hours / days', () => {
+    expect(formatRelativeTime('2026-10-11T11:57:00Z', NOW)).toBe('3m ago');
+    expect(formatRelativeTime('2026-10-11T07:00:00Z', NOW)).toBe('5h ago');
+    expect(formatRelativeTime('2026-10-09T12:00:00Z', NOW)).toBe('2d ago');
+    expect(formatRelativeTime('2026-09-11T12:00:00Z', NOW)).toBe('30d ago');
+  });
+  it('past 30 days → the absolute date is clearer', () => {
+    expect(formatRelativeTime('2026-08-01T08:30:00Z', NOW)).toBe('2026-08-01');
+  });
+  it('future (clock skew) or unparseable → the raw string, never a negative age', () => {
+    expect(formatRelativeTime('2026-10-12T00:00:00Z', NOW)).toBe('2026-10-12T00:00:00Z');
+    expect(formatRelativeTime('not-a-date', NOW)).toBe('not-a-date');
   });
 });
 

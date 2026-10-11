@@ -152,6 +152,27 @@ export function deleteSession(root: string, name: string): boolean {
   return true;
 }
 
+export type RenameResult =
+  | { ok: true; path: string }
+  | { ok: false; error: 'invalid-name' | 'not-found' | 'target-exists' | 'same-name' };
+
+/**
+ * Rename a session: the file moves to `<newName>.json` and the stored `name`
+ * field follows. The write side is the store's atomic save; the old file is
+ * removed only after the new one landed, so a failure never loses the
+ * conversation. Never overwrites an existing session.
+ */
+export function renameSession(root: string, oldName: string, newName: string): RenameResult {
+  if (!sessionNameOk(newName)) return { ok: false, error: 'invalid-name' };
+  if (oldName === newName) return { ok: false, error: 'same-name' };
+  const session = loadSession(root, oldName);
+  if (session === null) return { ok: false, error: 'not-found' };
+  if (existsSync(sessionPath(root, newName))) return { ok: false, error: 'target-exists' };
+  const path = saveSession(root, { ...session, name: newName });
+  rmSync(sessionPath(root, oldName));
+  return { ok: true, path };
+}
+
 /** List the project's sessions, newest update first. */
 export function listSessions(root: string): SessionSummary[] {
   const dir = sessionsDir(root);

@@ -114,7 +114,7 @@ The key is validated against the API **before** anything is stored.
 | `selora chat`                         | interactive agent REPL: tools, galaxy UI, permission menus, images            | [chat.md](docs/commands/chat.md)             |
 | `selora run "<prompt>"`               | one-shot streaming completion with the agent tool loop (permissions gated)    | [run.md](docs/commands/run.md)               |
 | `selora resume [name]`                | reopen a saved conversation in the chat REPL (default: the most recent)       | [resume.md](docs/commands/resume.md)         |
-| `selora sessions [list\|show\|rm]`    | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
+| `selora sessions [list\|show\|rm\|rename]` | manage agent conversation sessions                                            | [sessions.md](docs/commands/sessions.md)     |
 | `selora init`                         | write a project-local selora.json (model + agent context globs)               | [init.md](docs/commands/init.md)             |
 | `selora theme [name]`                 | show or set the UI theme (galaxy, nebula, aurora, mono)                       | [theme.md](docs/commands/theme.md)           |
 | `selora trust [add\|remove] [<dir>]`  | manage trusted workspaces for the chat trust screen                           | [trust.md](docs/commands/trust.md)           |
@@ -269,9 +269,12 @@ When the review gate is active (manual mode), the proposed change renders as
 a boxed, syntax-highlighted diff before it lands — unified or side-by-side,
 with word-level highlights on the exact tokens that changed and honest
 fallbacks for binary and generated files. Nothing is written until you say
-so, writes are atomic (tmp + rename, with conflict detection when the file
-changed since it was read), and every applied change is checkpointed for
-undo:
+so. On EVERY path — the review gate, the classic prompt, `--yes`, and
+session-allowed writes — writes are atomic (tmp + rename, mode-preserving)
+and stale-safe: a file that changed on disk since its preview was approved
+refuses with an honest error instead of being silently clobbered, and an
+`a` (always) write label re-asks when the file moved since the approval.
+Every applied change is checkpointed for undo:
 
 ```
 ╭─ ✎ Modified  src/utils/format.ts ─────────────────────── +3 −3 ─╮

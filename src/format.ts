@@ -70,3 +70,24 @@ export function daysLeft(endsAt: string, now: number = Date.now()): number | nul
   if (diff <= 0) return 0;
   return Math.ceil(diff / DAY_MS);
 }
+
+/**
+ * Relative "ago" stamp for display lists (v2.1.1 — sessions list): "just now"
+ * under 45s, then "3m ago" / "5h ago" / "2d ago"; past 30 days the absolute
+ * YYYY-MM-DD is clearer. Future/unparseable input degrades honestly (the raw
+ * string) — a clock skew must never print a negative age.
+ */
+export function formatRelativeTime(iso: string, now: number = Date.now()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const diff = now - t;
+  if (diff < 0) return iso;
+  if (diff < 45_000) return 'just now';
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days <= 30) return `${days}d ago`;
+  return iso.slice(0, 10);
+}

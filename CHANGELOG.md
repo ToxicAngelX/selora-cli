@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.1.1 — write safety everywhere + session rename
+
+- **Atomic, stale-safe writes on EVERY execution path** — previously only the
+  interactive review gate wrote atomically with conflict detection; the
+  classic prompt, `--yes`, session-allowed (`a`) writes, and non-TTY runs
+  used a plain overwrite. `write_file` / `edit_file` real runs now go through
+  the diff subsystem's atomic writer (tmp + fsync + rename in the same
+  directory, existing permission bits preserved), so a crash mid-write can
+  never leave a truncated file.
+- **Stale-edit detection** — the agent loop threads the approved dry run's
+  file content (`expectedBefore`) into the real write; when the bytes on
+  disk changed since the preview was approved (an editor save while the
+  prompt was open), the write refuses honestly — `… changed on disk since
+  the preview was approved — re-read the file and retry` — instead of
+  silently clobbering the external change.
+- **`a` (always) writes re-ask after external edits** — a session-allowed
+  write label now carries a content baseline (the approved change's
+  `after`); when a later same-label write finds the file moved since (you
+  edited it between turns), the loop asks again with the FRESH diff rather
+  than overwriting blind. The agent's own sequential writes refresh the
+  baseline, so they never false-positive.
+- **`selora sessions rename <name> <new-name>`** — rename a saved session
+  (file + stored name field; the new file lands before the old one is
+  removed; existing names are refused). `selora sessions list` now shows
+  relative update stamps (`5h ago`) instead of raw ISO timestamps; `--json`
+  keeps the ISO.
+
 ## 2.1.0 — Terminal UI and UX Modernization
 
 - **Complete Terminal UI Overhaul** — Modernized terminal UI featuring a vibrant neon-violet to electric-cyan gradient ASCII art banner, version badges, and categorized help system.
